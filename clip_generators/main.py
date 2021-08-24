@@ -6,7 +6,7 @@ from clip_generators.models.taming_transformers.clip_generator.trainer import Tr
 import clip
 
 from clip_generators.models.taming_transformers.clip_generator.dreamer import load_vqgan_model
-from clip_generators.models.taming_transformers.clip_generator.trainer import download_models, network_list
+from clip_generators.models.taming_transformers.clip_generator.trainer import network_list
 
 
 def generate(prompt):
