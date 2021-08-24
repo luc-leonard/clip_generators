@@ -81,8 +81,8 @@ class IrcBot(irc.bot.SingleServerIRCBot):
         self.current_generating_user = None
         self.stop_generating = False
         print('loading clip')
-        #self.clip = clip.load('ViT-B/32', jit=False)[0].eval().requires_grad_(False).to('cuda:0')
-        # self.vqgan_model = load_vqgan_model('../models/imagenet/vqgan_imagenet_f16_16384.yaml', '../models/imagenet/vqgan_imagenet_f16_16384.ckpt')
+        self.clip = clip.load('ViT-B/16', jit=False)[0].eval().requires_grad_(False).to('cuda:0')
+
 
     def on_nicknameinuse(self, c: irc.client, e):
         c.nick(c.get_nickname() + "_")
@@ -128,17 +128,8 @@ class IrcBot(irc.bot.SingleServerIRCBot):
     def generate_image_diffusion(self, arguments: GenerationArgs):
         print(arguments)
         now = datetime.datetime.now()
-        trainer = Diffusion_trainer(arguments.prompt.split('||')[0],
-            learning_rate = arguments.learning_rate,
-            save_every = arguments.refresh_every,
+        trainer = Diffusion_trainer(arguments.prompt.split('||')[0], self.clip,
             outdir = f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{arguments.prompt}',
-            device = 'cuda:0',
-            image_size = (600, 600),
-            crazy_mode = arguments.crazy_mode,
-            cutn = arguments.cut,
-            steps = arguments.steps,
-            full_image_loss = True,
-            nb_augments = 1,
         )
         return trainer
 

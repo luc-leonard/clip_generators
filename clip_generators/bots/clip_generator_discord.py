@@ -7,6 +7,8 @@ from typing import Dict, Callable
 
 import clip
 import discord
+from discord import Thread
+from discord.abc import Messageable
 
 from clip_generators.models.taming_transformers.clip_generator.dreamer import load_vqgan_model
 from clip_generators.models.taming_transformers.clip_generator.trainer import Trainer
@@ -18,12 +20,12 @@ class DreamerClient(discord.Client):
     def __init__(self, **options):
         super().__init__(**options)
 
-        self.clip = None
+        self.clip = clip.load('ViT-B/16', jit=False)[0].eval().requires_grad_(False).to('cuda:0')
         self.current_user = None
         self.stop_flag = False
         self.commands = self.make_commands()
-        self.default_arguments = {}
         self.generating = False
+        self.generating_thread = None
 
     async def on_ready(self):
         print(f'{self.user} has connected to Discord!')
@@ -33,19 +35,17 @@ class DreamerClient(discord.Client):
             '!generate': self.generate_diffusion_command,
             '!generate_legacy': self.generate_command,
             '!stop': self.stop_command,
-            '!set': self.set_command,
+            '!leave': self.leave_command,
         }
-
-    def set_command(self, message: discord.Message):
-        [attribute, value] = message.content[len("!set") + 1:].split("=")
-        print(attribute, value)
-        self.default_arguments[attribute] = value
 
     def stop_command(self, message: discord.Message):
         if self.current_user == message.author:
             self.stop_flag = True
         else:
             self.loop.create_task(message.channel.send(f'Only {self.current_user} can stop me'))
+
+    def leave_command(self, message: discord.Message):
+        self.loop.create_task( message.guild.leave())
 
     def generate_command(self, message: discord.Message):
         if self.generating:
@@ -59,7 +59,6 @@ class DreamerClient(discord.Client):
             print(ex)
             self.loop.create_task(message.channel.send('error: ' + str(ex)))
             return
-        self.loop.create_task(message.channel.send(f'generating {arguments.prompt}'))
         print(arguments)
         trainer = self.generate_image(arguments)
         self.arguments = arguments
@@ -67,7 +66,7 @@ class DreamerClient(discord.Client):
         self.current_user = message.author
         self.stop_flag = False
         self.generating = True
-        self.generating_thread = threading.Thread(target=self.train, args=(trainer, message.channel))
+        self.generating_thread = threading.Thread(target=self.train, args=(trainer, message))
         self.generating_thread.start()
 
     def generate_diffusion_command(self, message: discord.Message):
@@ -82,7 +81,7 @@ class DreamerClient(discord.Client):
             print(ex)
             self.loop.create_task(message.channel.send('error: ' + str(ex)))
             return
-        self.loop.create_task(message.channel.send(f'generating {arguments.prompt}'))
+
         print(arguments)
         trainer = self.generate_image_diffusion(arguments)
         self.arguments = arguments
@@ -91,10 +90,13 @@ class DreamerClient(discord.Client):
         self.stop_flag = False
         self.generating = True
 
-        self.generating_thread = threading.Thread(target=self.train, args=(trainer, message.channel))
+        self.generating_thread = threading.Thread(target=self.train, args=(trainer, message))
         self.generating_thread.start()
 
     async def on_message(self, message: discord.Message):
+        # Thread
+        if isinstance(message.channel, Thread):
+            return
         if message.author == self.user:
             return
 
@@ -109,7 +111,10 @@ class DreamerClient(discord.Client):
             await channel.send(trainer.prompt)
         await channel.send(f'step {iteration} / {trainer.steps}', file=discord.File(trainer.get_generated_image_path()))
 
-    async def _train(self, trainer, channel):
+    async def _train(self, trainer, message: discord.Message):
+
+        channel = await message.create_thread(name=trainer.prompt, )
+        await channel.send('generating...')
         now = datetime.datetime.now()
         try:
             for it in trainer.epoch():
@@ -124,34 +129,28 @@ class DreamerClient(discord.Client):
             shutil.copy(trainer.get_generated_image_path(),
                         f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{trainer.prompt.replace("//", "_")}.png')
             await self.send_progress(trainer, channel, trainer.steps)
+            await message.reply(f'', file=discord.File(trainer.get_generated_image_path()))
         except Exception as ex:
             await channel.send(str(ex))
         self.generating = False
 
-    def train(self, trainer, channel):
-        self.loop.create_task(self._train(trainer, channel))
+    def train(self, trainer, message: discord.Message):
+        self.loop.create_task(self._train(trainer, message))
 
     def generate_image_diffusion(self, arguments: GenerationArgs):
-        print('default arguments', self.default_arguments)
-        final_arguments = {**arguments.dict(), **self.default_arguments}
-        print(final_arguments)
-        arguments = GenerationArgs(**final_arguments)
         now = datetime.datetime.now()
 
         trainer = Diffusion_trainer(arguments.prompt.split('||')[0],
+                                    self.clip,
                                     outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{arguments.prompt}',
                                     )
         return trainer
 
     def generate_image(self, arguments: GenerationArgs):
-        print('default arguments', self.default_arguments)
-        final_arguments = {**arguments.dict(), **self.default_arguments}
-        print(final_arguments)
-        arguments = GenerationArgs(**final_arguments)
         now = datetime.datetime.now()
         trainer = Trainer(arguments.prompt.split('||'),
                           vqgan_model=load_vqgan_model(arguments.config, arguments.checkpoint).to('cuda'),
-                          clip_model=clip.load('ViT-B/16', jit=False)[0].eval().requires_grad_(False).to('cuda:0'),
+                          clip_model=self.clip,
                           learning_rate=arguments.learning_rate,
                           save_every=arguments.refresh_every,
                           outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{arguments.prompt}',
