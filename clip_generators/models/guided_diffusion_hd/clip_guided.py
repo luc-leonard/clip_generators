@@ -20,17 +20,6 @@ from clip_generators.models.guided_diffusion_hd.guided_diffusion.guided_diffusio
 from clip_generators.models.taming_transformers.clip_generator.utils import MakeCutouts
 
 
-def fetch(url_or_path):
-    if str(url_or_path).startswith('http://') or str(url_or_path).startswith('https://'):
-        r = requests.get(url_or_path)
-        r.raise_for_status()
-        fd = io.BytesIO()
-        fd.write(r.content)
-        fd.seek(0)
-        return fd
-    return open(url_or_path, 'rb')
-
-
 def spherical_dist_loss(x, y):
     x = F.normalize(x, dim=-1)
     y = F.normalize(y, dim=-1)

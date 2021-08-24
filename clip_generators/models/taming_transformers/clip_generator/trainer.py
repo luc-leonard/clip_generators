@@ -2,6 +2,7 @@ import itertools
 import os
 import sys
 import time
+import urllib
 from pathlib import Path
 
 import imageio
@@ -41,6 +42,26 @@ def network_list():
         }
     }
 
+
+# def download_models():
+#     current_path = Path(os.path.dirname(os.path.realpath(__file__)))
+#     models_path = current_path / '..' / 'models'
+#
+#     if not models_path.exists():
+#         models_path.mkdir()
+#
+#     default_network = network_list()['imagenet']
+#
+#     if not default_network['config'].exists():
+#         default_network['config'].parent.mkdir(parents=True, exist_ok=True)
+#         print('downloading config...')
+#         urllib.request.URLopener().retrieve(
+#             'https://mega.nz/file/WZUWHLAa#395Xr49Wvs0lTvLI1EN5Tub4o8vsTSEKoIDJOV_HCfA',
+#             str(default_network['config']), reporthook=lambda block_id, bs, size: print(block_id, bs, size))
+#         print('downloading checkpoint...')
+#         urllib.request.URLopener().retrieve(
+#             'https://mega.nz/file/CAF2SZ7R#2hksOYJ8kvRnUexfMZOfwlL7TRGUyeTXQ346--llFOk',
+#             str(default_network['checkpoint']), reporthook=lambda block_id, bs, size: print(block_id, bs, size))
 
 class Trainer:
     def __init__(self,
