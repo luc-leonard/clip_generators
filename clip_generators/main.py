@@ -18,6 +18,12 @@ def generate(prompt):
         ...
 
 
+def generate_diffusion(prompt):
+    clip_model = clip.load('ViT-B/16', jit=False)[0].eval().requires_grad_(False).to('cuda:0')
+    trainer = Diffusion_trainer(prompt, clip_model, outdir=f'./out/{prompt}/')
+    for it in trainer.epoch():
+        ...
+
+
 if __name__ == '__main__':
-    download_models()
-    generate(sys.argv[-1])
+    generate_diffusion(sys.argv[-1])
