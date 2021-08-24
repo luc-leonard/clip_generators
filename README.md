@@ -1,5 +1,5 @@
 # clip_generators
-some text to image models, all using clips. Include bots for IRC and discord.
+some text to image models, all using clips. Include bots for IRC and discord. This relies A LOT on the work of https://twitter.com/RiversHaveWings
 
 you will need to setup a virtual env, and install pytorch 1.7.1 yourself, with the CUDA version that match your hardware
 (cf. https://pytorch.org/get-started/previous-versions/ )
