@@ -95,9 +95,11 @@ def vector_quantize(x, codebook):
 
 
 class DifferentiableAugmentations(nn.Module):
-    def __init__(self, cutn):
+    def __init__(self, cutn, full_image_loss):
         super().__init__()
         self.cutn = cutn
+        if full_image_loss:
+            self.cutn = self.cutn + 1
         self.augs = nn.Sequential(
             K.RandomHorizontalFlip(p=0.5),
             K.ColorJitter(hue=0.01, saturation=0.01, p=0.7),
@@ -110,7 +112,7 @@ class DifferentiableAugmentations(nn.Module):
     def forward(self, input):
         input = self.augs(input)
         if self.noise_fac:
-            facs = input.new_empty([self.cutn + 1, 1, 1, 1]).uniform_(0, self.noise_fac)
+            facs = input.new_empty([self.cutn, 1, 1, 1]).uniform_(0, self.noise_fac)
             input = input + facs * torch.randn_like(input)
         return input
 

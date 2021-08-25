@@ -3,21 +3,21 @@ import os
 import time
 import urllib.request
 from pathlib import Path
-from typing import io
+from typing import io, List, Tuple
 
 import clip
 import imageio
 import numpy as np
 import torch
-from google.auth.transport import requests
 from progressbar import progressbar
+from torch import nn
 from torch.nn import functional as F
 from torchvision import transforms
 from torchvision.transforms import functional as TF
 
 from clip_generators.models.guided_diffusion_hd.guided_diffusion.guided_diffusion.script_util import \
     create_model_and_diffusion, model_and_diffusion_defaults
-from clip_generators.models.taming_transformers.clip_generator.utils import MakeCutouts
+from clip_generators.models.guided_diffusion_hd.discriminator import ClipDiscriminator
 
 
 def spherical_dist_loss(x, y):
@@ -81,7 +81,7 @@ normalize = transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073],
                                  std=[0.26862954, 0.26130258, 0.27577711])
 
 
-def generate(prompt: str, clip_model, out_dir: Path):
+def generate(prompts: List[Tuple[str, float]], clip_model, out_dir: Path):
     batch_size = 1
     clip_guidance_scale = 1000
     tv_scale = 150
@@ -97,16 +97,13 @@ def generate(prompt: str, clip_model, out_dir: Path):
     else:
         torch.manual_seed(time.time())
 
-    clip_size = clip_model.visual.input_resolution
-    text_embed = clip_model.encode_text(clip.tokenize(prompt).to('cuda:0')).float()
-
+    discriminator = ClipDiscriminator(clip_model, prompts, cutn, cut_pow, 'cuda:0', False, 0)
     init = None
     # if init_image is not None:
     #     init = Image.open(fetch(init_image)).convert('RGB')
     #     init = init.resize((model_config['image_size'], model_config['image_size']), Image.LANCZOS)
     #     init = TF.to_tensor(init).to(device).unsqueeze(0).mul(2).sub(1)
 
-    make_cutouts = MakeCutouts(clip_size, cutn, cut_pow)
     cur_t = None
 
     def cond_fn(x, t, y=None):
@@ -117,11 +114,9 @@ def generate(prompt: str, clip_model, out_dir: Path):
             out = diffusion.p_mean_variance(model, x, my_t, clip_denoised=False, model_kwargs={'y': y})
             fac = diffusion.sqrt_one_minus_alphas_cumprod[cur_t]
             x_in = out['pred_xstart'] * fac + x * (1 - fac)
-            clip_in = normalize(make_cutouts(x_in.add(1).div(2)))
-            # clip_in = differentiable_augmentation(clip_in)
-            image_embeds = clip_model.encode_image(clip_in).float().view([cutn, n, -1])
-            dists = spherical_dist_loss(image_embeds, text_embed.unsqueeze(0))
-            losses = dists.mean(0)
+            dists = discriminator(x_in, n)
+
+            losses = torch.cat(dists).mean()
             tv_losses = tv_loss(x_in)
             loss = losses.sum() * clip_guidance_scale + tv_losses.sum() * tv_scale
             return -torch.autograd.grad(loss, x)[0]
@@ -160,15 +155,14 @@ def generate(prompt: str, clip_model, out_dir: Path):
 
 
 class Trainer:
-    def __init__(self, prompt, clip_model, *, outdir: str, ):
-        self.prompt = prompt
+    def __init__(self, prompts, clip_model, *, outdir: str, ):
+        self.prompts = prompts
         self.clip = clip_model
-        self.prompts = [prompt]
         self.out_dir = Path(outdir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
     def epoch(self):
-        return generate(self.prompt, self.clip, self.out_dir)
+        return generate(self.prompts, self.clip, self.out_dir)
 
     def get_generated_image_path(self) -> Path:
         return self.out_dir / 'progress_latest.png'
@@ -180,3 +174,7 @@ class Trainer:
     @property
     def steps(self):
         return 1000
+
+    @property
+    def prompt(self):
+        return self.prompts[0][0]

@@ -93,9 +93,8 @@ class Trainer:
             self.iterator = range(steps)
         self.steps = steps
         self.prompts = prompts
-        self.prompt = prompts[0]
+        self.prompt = prompts[0][0]
         self.outdir.mkdir(exist_ok=True, parents=True)
-        (self.outdir / 'prompt.txt').write_text('\n'.join(prompts))
         self.clip_discriminator = ClipDiscriminator(clip_model, prompts, cutn, cut_pow, device,
                                                     full_image_loss=full_image_loss,
                                                     nb_augments=nb_augments )
