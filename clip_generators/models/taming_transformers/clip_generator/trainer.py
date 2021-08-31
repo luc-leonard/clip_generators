@@ -5,6 +5,7 @@ import time
 import urllib
 from pathlib import Path
 
+import PIL
 import imageio
 import numpy as np
 import torch
@@ -79,7 +80,7 @@ class Trainer:
                  crazy_mode=False,
                  nb_augments=3,
                  full_image_loss=True,
-                 save_every=50):
+                 save_every=50,init_image =None):
 
         if seed is None:
             torch.manual_seed(int(time.time()))
@@ -100,7 +101,7 @@ class Trainer:
                                                     nb_augments=nb_augments )
 
         self.generator = Generator(vqgan_model).to(device)
-        self.z_space = ZSpace(vqgan_model, image_size, device=device)
+        self.z_space = ZSpace(vqgan_model, image_size, device=device, init_image=init_image)
         self.optimizer = optim.Adam([self.z_space.z], lr=learning_rate)
         self.scheduler = None
         if crazy_mode is True and steps is not None:

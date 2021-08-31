@@ -34,6 +34,7 @@ class GenerationArgs(BaseModel):
     prompts: List[Tuple[str, float]] = []
     crazy_mode: bool = False
     learning_rate: float = 0.05
+    ddim_respacing: bool = True
 
     @property
     def config(self):
@@ -57,6 +58,7 @@ def parse_prompt_args(prompt: str = '') -> GenerationArgs:
     parser.add_argument('--full-image-loss', type=bool, default=True)
     parser.add_argument('--network', type=str, default='imagenet')
     parser.add_argument('--network-type', type=str, default='diffusion')
+    parser.add_argument('--ddim-respacing', type=bool, default=True)
     try:
         parsed_args = parser.parse_args(shlex.split(prompt))
         args = GenerationArgs(prompt=parsed_args.prompt,
@@ -70,6 +72,7 @@ def parse_prompt_args(prompt: str = '') -> GenerationArgs:
                               nb_augments=parsed_args.transforms,
                               full_image_loss=parsed_args.full_image_loss,
                               network_type=parsed_args.network_type,
+                              ddim_respacing=parsed_args.ddim_respacing
                               )
         args.prompts = []
         for the_prompt in parsed_args.prompt:
@@ -141,6 +144,7 @@ class IrcBot(irc.bot.SingleServerIRCBot):
         now = datetime.datetime.now()
         trainer = Diffusion_trainer(arguments.prompt.split('||')[0], self.clip,
                                     outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{arguments.prompt}',
+                                    init_image=arguments.resume_from,
                                     )
         return trainer
 

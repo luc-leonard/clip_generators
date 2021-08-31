@@ -106,7 +106,7 @@ class DreamerClient(discord.Client):
         now = datetime.datetime.now()
         try:
             for it in trainer.epoch():
-                if it % 100 == 0:
+                if it % 100 == 0 or it < 0:
                     await self.send_progress(trainer, channel, it)
                 await asyncio.sleep(0)
                 if self.stop_flag:
@@ -131,6 +131,8 @@ class DreamerClient(discord.Client):
 
         trainer = Diffusion_trainer(arguments.prompts,
                                     self.clip,
+                                    init_image=arguments.resume_from,
+                                    ddim_respacing=arguments.ddim_respacing,
                                     outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{arguments.prompts[0][0]}',
                                     )
         return trainer
@@ -144,12 +146,13 @@ class DreamerClient(discord.Client):
                           save_every=arguments.refresh_every,
                           outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{arguments.prompts[0][0]}',
                           device='cuda:0',
-                          image_size=(600, 600),
+                          image_size=(400, 400),
                           crazy_mode=arguments.crazy_mode,
                           cutn=arguments.cut,
                           steps=arguments.steps,
                           full_image_loss=True,
                           nb_augments=1,
+                          init_image=arguments.resume_from,
                           )
         return trainer
 

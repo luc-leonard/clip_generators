@@ -1,7 +1,12 @@
+import io
+
+import requests
 from omegaconf import OmegaConf
 from torch import nn
 import torch.nn.functional as F
 import torch
+import PIL.Image
+from torchvision.transforms import functional as TF
 
 from .utils import vector_quantize, clamp_with_grad
 from clip_generators.models.taming_transformers.taming.models import vqgan, cond_transformer
@@ -33,9 +38,18 @@ class Generator(nn.Module):
         z_q = vector_quantize(z.movedim(1, 3), self.model.quantize.embedding.weight).movedim(3, 1)
         return clamp_with_grad(self.model.decode(z_q).add(1).div(2), 0, 1)
 
+def fetch(url_or_path):
+    if str(url_or_path).startswith('http://') or str(url_or_path).startswith('https://'):
+        r = requests.get(url_or_path)
+        r.raise_for_status()
+        fd = io.BytesIO()
+        fd.write(r.content)
+        fd.seek(0)
+        return fd
+    return open(url_or_path, 'rb')
 
 class ZSpace(nn.Module):
-    def __init__(self, model, image_size, device):
+    def __init__(self, model, image_size, device, init_image):
         super().__init__()
         self.z_min = model.quantize.embedding.weight.min(dim=0).values[None, :, None, None]
         self.z_max = model.quantize.embedding.weight.max(dim=0).values[None, :, None, None]
@@ -46,10 +60,15 @@ class ZSpace(nn.Module):
         f = 2 ** (model.decoder.num_resolutions - 1)
         n_toks = model.quantize.n_e
         toksX, toksY = image_size[0] // f, image_size[1] // f
-
-        one_hot = F.one_hot(torch.randint(n_toks, [toksY * toksX], device=device), n_toks).float()
-        z = one_hot @ model.quantize.embedding.weight
-        self.z = z.view([-1, toksY, toksX, model.quantize.e_dim]).permute(0, 3, 1, 2)
+        if init_image:
+            sideX, sideY = toksX * f, toksY * f
+            pil_image = PIL.Image.open(fetch(init_image)).convert('RGB')
+            pil_image = pil_image.resize((sideX, sideY), PIL.Image.LANCZOS)
+            self.z, *_ = model.encode(TF.to_tensor(pil_image).to(device).unsqueeze(0) * 2 - 1)
+        else:
+            one_hot = F.one_hot(torch.randint(n_toks, [toksY * toksX], device=device), n_toks).float()
+            z = one_hot @ model.quantize.embedding.weight
+            self.z = z.view([-1, toksY, toksX, model.quantize.e_dim]).permute(0, 3, 1, 2)
         self.z.requires_grad_(True)
 
     @torch.no_grad()
