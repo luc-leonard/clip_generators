@@ -49,7 +49,7 @@ class ClipDiscriminator(nn.Module):
         image_features: Any
         result: List[torch.Tensor] = []
 
-        x_cutout = self.make_cutouts(x.add(1).div(2))
+        x_cutout = self.make_cutouts(x)
         xs_tensor = self.normalize(x_cutout)
         image_features = self.clip.encode_image(xs_tensor).float().view([self.cutn, n, -1])
         for embed in self.embeds:

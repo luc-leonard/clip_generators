@@ -12,8 +12,9 @@ from discord.abc import Messageable
 
 from clip_generators.models.taming_transformers.clip_generator.dreamer import load_vqgan_model
 from clip_generators.models.taming_transformers.clip_generator.trainer import Trainer
-from clip_generators.bots.clip_generator_irc import GenerationArgs, parse_prompt_args
+from clip_generators.utils import GenerationArgs, parse_prompt_args
 from clip_generators.models.guided_diffusion_hd.clip_guided import Trainer as Diffusion_trainer
+from clip_generators.utils import make_arguments_parser
 
 
 class DreamerClient(discord.Client):
@@ -36,7 +37,11 @@ class DreamerClient(discord.Client):
             '!generate_legacy': self.generate_command,
             '!stop': self.stop_command,
             '!leave': self.leave_command,
+            '!help': self.help_command,
         }
+
+    def help_command(self, message: discord.Message):
+        self.loop.create_task(message.channel.send(make_arguments_parser().usage))
 
     def stop_command(self, message: discord.Message):
         if self.current_user == message.author:
@@ -64,7 +69,7 @@ class DreamerClient(discord.Client):
             arguments = parse_prompt_args('--prompt "osef;1"')
             arguments.prompts = [(prompt, 1.0)]
 
-        print(arguments)
+
         if arguments.network_type == 'diffusion':
             trainer = self.generate_image_diffusion(arguments)
         else:
@@ -101,7 +106,7 @@ class DreamerClient(discord.Client):
             channel = await message.create_thread(name=trainer.prompt, )
         else:
             channel = message.channel
-
+        self.loop.create_task(channel.send('arguments = ' + str(self.arguments)))
         await channel.send('generating...')
         now = datetime.datetime.now()
         try:
@@ -133,7 +138,10 @@ class DreamerClient(discord.Client):
                                     self.clip,
                                     init_image=arguments.resume_from,
                                     ddim_respacing=arguments.ddim_respacing,
+                                    seed=arguments.seed,
+                                    steps=arguments.steps,
                                     outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{arguments.prompts[0][0]}',
+                                    skip_timesteps=arguments.skips,
                                     )
         return trainer
 
