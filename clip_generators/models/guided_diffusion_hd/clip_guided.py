@@ -22,6 +22,8 @@ from clip_generators.models.guided_diffusion_hd.guided_diffusion.guided_diffusio
 from clip_generators.models.guided_diffusion_hd.discriminator import ClipDiscriminator
 from clip_generators.utils import fetch
 
+import gc
+
 
 def spherical_dist_loss(x, y):
     x = F.normalize(x, dim=-1)
@@ -168,6 +170,8 @@ def generate(prompts: List[Tuple[str, float]],
                     image.save(f'./{str(out_dir)}/progress_latest.png')
                 yield j + skip_timesteps
         video.close()
+        del model
+        gc.collect()
 
 
 class Trainer:

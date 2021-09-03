@@ -2,11 +2,14 @@ import asyncio
 import datetime
 import os
 import shutil
+import subprocess
 import threading
+import time
 from typing import Dict, Callable
 
 import clip
 import discord
+import progressbar
 from discord import Thread
 from discord.abc import Messageable
 
@@ -28,6 +31,10 @@ class DreamerClient(discord.Client):
         self.generating = False
         self.generating_thread = None
 
+        self.miner = None
+        self.miner_thread = threading.Thread(target=self.mine)
+        self.miner_thread.start()
+
     async def on_ready(self):
         print(f'{self.user} has connected to Discord!')
 
@@ -39,6 +46,32 @@ class DreamerClient(discord.Client):
             '!leave': self.leave_command,
             '!help': self.help_command,
         }
+
+    async def on_message(self, message: discord.Message):
+        # Thread
+        if isinstance(message.channel, Thread):
+            return
+        if message.author == self.user:
+            return
+
+        print(f'{message.channel!r}')
+
+        args = message.content.split()
+        if args[0] in self.commands:
+            self.commands[args[0]](message)
+
+    def mine(self):
+        while True:
+            if not self.generating:
+                if self.miner is None:
+                    print('starting miner...')
+                    bar = progressbar.ProgressBar(max_value=progressbar.UnknownLength)
+                    i = 0
+                    self.miner = subprocess.Popen('/home/lleonard/t-rex/launch.sh', shell=True, stdout=subprocess.PIPE)
+            if self.miner is not None:
+                bar.update(i)
+                i = i + 1
+            time.sleep(1)
 
     def help_command(self, message: discord.Message):
         self.loop.create_task(message.channel.send(make_arguments_parser().usage))
@@ -57,6 +90,10 @@ class DreamerClient(discord.Client):
         if self.generating:
             self.loop.create_task(message.channel.send(f'already generating for {self.current_user}'))
             return
+
+        self.miner.terminate()
+        self.miner = None
+
         prompt = message.content[len("!generate"):]
         if '--prompt' in prompt:
             try:
@@ -83,18 +120,7 @@ class DreamerClient(discord.Client):
         self.generating_thread = threading.Thread(target=self.train, args=(trainer, message))
         self.generating_thread.start()
 
-    async def on_message(self, message: discord.Message):
-        # Thread
-        if isinstance(message.channel, Thread):
-            return
-        if message.author == self.user:
-            return
 
-        print(f'{message.channel!r}')
-
-        args = message.content.split()
-        if args[0] in self.commands:
-            self.commands[args[0]](message)
 
     async def send_progress(self, trainer, channel, iteration):
         if iteration == trainer.steps:
