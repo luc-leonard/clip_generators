@@ -174,7 +174,7 @@ def generate(prompts: List[Tuple[str, float]],
         gc.collect()
 
 
-class Trainer:
+class Dreamer:
     def __init__(self, prompts, clip_model, *, outdir: str, init_image: Optional[str], ddim_respacing, seed, steps, skip_timesteps):
         self.prompts = prompts
         self.clip = clip_model

@@ -8,7 +8,7 @@ from typing import Optional, Tuple, List
 import requests
 from pydantic import BaseModel
 
-from clip_generators.models.taming_transformers.clip_generator.trainer import network_list
+from clip_generators.models.taming_transformers.clip_generator.dreamer import network_list
 
 
 def fetch(url_or_path):

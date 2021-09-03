@@ -1,77 +1,123 @@
-import io
+import itertools
+import os
+import sys
+import time
+import urllib
+from pathlib import Path
 
-import requests
-from omegaconf import OmegaConf
-from torch import nn
-import torch.nn.functional as F
+import PIL
+import imageio
+import numpy as np
 import torch
-import PIL.Image
+from progressbar import progressbar
+from torch import optim
 from torchvision.transforms import functional as TF
 
-from .utils import vector_quantize, clamp_with_grad
-from clip_generators.models.taming_transformers.taming.models import vqgan, cond_transformer
+from .discriminator import ClipDiscriminator
+from .generator import Generator
+from .generator import ZSpace
+
+current_path = Path(os.path.dirname(os.path.realpath(__file__)))
+sys.path.append(str(current_path / '..'))
 
 
-def load_vqgan_model(config_path, checkpoint_path):
-    config = OmegaConf.load(config_path)
-    if config.model.target == 'taming.models.vqgan.VQModel':
-        model = vqgan.VQModel(**config.model.params)
-        model.eval().requires_grad_(False)
-        model.init_from_ckpt(checkpoint_path)
-    elif config.model.target == 'taming.models.cond_transformer.Net2NetTransformer':
-        parent_model = cond_transformer.Net2NetTransformer(**config.model.params)
-        parent_model.eval().requires_grad_(False)
-        parent_model.init_from_ckpt(checkpoint_path)
-        model = parent_model.first_stage_model
-    else:
-        raise ValueError(f'unknown model type: {config.model.target}')
-    del model.loss
-    return model
+def network_list():
+    current_path = Path(os.path.dirname(os.path.realpath(__file__)))
+    models_path = current_path / '..' / 'models'
+    return {
+        'ffhq': {
+            'config': models_path / 'ffhq' / 'configs' / '2020-11-13T21-41-45-project.yaml',
+            'checkpoint': models_path / 'ffhq' / 'checkpoints' / 'last.ckpt'
+        },
+        'imagenet': {
+            'config': models_path / 'imagenet' / 'vqgan_imagenet_f16_16384.yaml',
+            'checkpoint': models_path / 'imagenet' / 'vqgan_imagenet_f16_16384.ckpt'
+        },
+        'wikiart': {
+            'config': models_path / 'wikiart' / 'configs' / 'wikiart_f16_16384_8145600.yaml',
+            'checkpoint': models_path / 'wikiart' / 'checkpoints' / 'wikiart_f16_16384_8145600.ckpt',
+        },
+        'coco': {
+            'config': models_path / 'coco' / 'coco.yaml',
+            'checkpoint': models_path / 'coco' / 'coco.ckpt'
+        }
+    }
 
 
-class Generator(nn.Module):
-    def __init__(self, model):
-        super().__init__()
-        self.model = model.eval()
+class Dreamer:
+    def __init__(self,
+                 prompts,
+                 vqgan_model,
+                 clip_model,
+                 device='cuda:0',
+                 learning_rate=0.05,
+                 outdir='./out',
+                 image_size=(512, 512),
+                 cutn=64,
+                 cut_pow=1.,
+                 seed=None,
+                 steps=None,
+                 crazy_mode=False,
+                 nb_augments=3,
+                 full_image_loss=True,
+                 save_every=50,init_image =None):
 
-    def forward(self, z):
-        z_q = vector_quantize(z.movedim(1, 3), self.model.quantize.embedding.weight).movedim(3, 1)
-        return clamp_with_grad(self.model.decode(z_q).add(1).div(2), 0, 1)
-
-def fetch(url_or_path):
-    if str(url_or_path).startswith('http://') or str(url_or_path).startswith('https://'):
-        r = requests.get(url_or_path)
-        r.raise_for_status()
-        fd = io.BytesIO()
-        fd.write(r.content)
-        fd.seek(0)
-        return fd
-    return open(url_or_path, 'rb')
-
-class ZSpace(nn.Module):
-    def __init__(self, model, image_size, device, init_image):
-        super().__init__()
-        self.z_min = model.quantize.embedding.weight.min(dim=0).values[None, :, None, None]
-        self.z_max = model.quantize.embedding.weight.max(dim=0).values[None, :, None, None]
-
-        self.z_min.requires_grad_(False)
-        self.z_max.requires_grad_(False)
-
-        f = 2 ** (model.decoder.num_resolutions - 1)
-        n_toks = model.quantize.n_e
-        toksX, toksY = image_size[0] // f, image_size[1] // f
-        if init_image:
-            sideX, sideY = toksX * f, toksY * f
-            pil_image = PIL.Image.open(fetch(init_image)).convert('RGB')
-            pil_image = pil_image.resize((sideX, sideY), PIL.Image.LANCZOS)
-            self.z, *_ = model.encode(TF.to_tensor(pil_image).to(device).unsqueeze(0) * 2 - 1)
+        if seed is None:
+            torch.manual_seed(int(time.time()))
         else:
-            one_hot = F.one_hot(torch.randint(n_toks, [toksY * toksX], device=device), n_toks).float()
-            z = one_hot @ model.quantize.embedding.weight
-            self.z = z.view([-1, toksY, toksX, model.quantize.e_dim]).permute(0, 3, 1, 2)
-        self.z.requires_grad_(True)
+            torch.manual_seed(seed)
+        self.save_every = save_every
+        self.outdir = Path(outdir)
+        if steps is None:
+            self.iterator = itertools.count(start=0)
+        else:
+            self.iterator = range(steps)
+        self.steps = steps
+        self.prompts = prompts
+        self.prompt = prompts[0][0]
+        self.outdir.mkdir(exist_ok=True, parents=True)
+        self.clip_discriminator = ClipDiscriminator(clip_model, prompts, cutn, cut_pow, device,
+                                                    full_image_loss=full_image_loss,
+                                                    nb_augments=nb_augments )
+
+        self.generator = Generator(vqgan_model).to(device)
+        self.z_space = ZSpace(vqgan_model, image_size, device=device, init_image=init_image)
+        self.optimizer = optim.Adam([self.z_space.z], lr=learning_rate)
+        self.scheduler = None
+        if crazy_mode is True and steps is not None:
+           self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr=learning_rate * 10, total_steps=steps)
+        self.video = imageio.get_writer(f'{outdir}/out.mp4', mode='I', fps=5, codec='libx264', bitrate='16M')
+
+    def get_generated_image_path(self):
+        return self.outdir / f'progress_latest.png'
 
     @torch.no_grad()
-    def clamp(self):
-        self.z.copy_(self.z.maximum(self.z_min).minimum(self.z_max))
+    def save_image(self, i, generated_image, losses):
+        losses_str = ', '.join(f'{loss.item():g}' for loss in losses)
+        print(f'i: {i}, loss: {sum(losses).item():g}, losses: {losses_str}')
+        pil_image = TF.to_pil_image(generated_image[0].cpu())
+        self.video.append_data(np.array(pil_image))
+        pil_image.save(str(self.outdir / f'progress_latest.png'))
 
+    def start(self):
+        for _ in self.epoch():
+            ...
+
+    def close(self):
+        self.video.close()
+
+    def epoch(self):
+        for i in progressbar(self.iterator):
+            self.optimizer.zero_grad()
+            generated_image = self.generator(self.z_space.z)
+            losses = self.clip_discriminator(generated_image)
+            if i % self.save_every == 0:
+                self.save_image(i, generated_image, losses)
+            yield i
+
+            sum(losses).backward()
+            self.optimizer.step()
+            if self.scheduler is not None:
+                self.scheduler.step()
+            self.z_space.clamp()
+            i = i + 1

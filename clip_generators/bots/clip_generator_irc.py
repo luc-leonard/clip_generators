@@ -8,9 +8,9 @@ import clip
 import irc
 import irc.bot
 
-from clip_generators.models.guided_diffusion_hd.clip_guided import Trainer as Diffusion_trainer
-from clip_generators.models.taming_transformers.clip_generator.dreamer import load_vqgan_model
-from clip_generators.models.taming_transformers.clip_generator.trainer import Trainer
+from clip_generators.models.guided_diffusion_hd.clip_guided import Dreamer as Diffusion_trainer
+from clip_generators.models.taming_transformers.clip_generator.generator import load_vqgan_model
+from clip_generators.models.taming_transformers.clip_generator.dreamer import Dreamer
 from clip_generators.utils import GenerationArgs, parse_prompt_args
 
 
@@ -51,7 +51,7 @@ class IrcBot(irc.bot.SingleServerIRCBot):
     def generate_image(self, arguments: GenerationArgs):
         vqgan_model = load_vqgan_model(arguments.config, arguments.checkpoint).to('cuda')
         now = datetime.datetime.now()
-        trainer = Trainer([arguments.prompt],
+        trainer = Dreamer([arguments.prompt],
                           vqgan_model,
                           self.clip,
                           learning_rate=arguments.learning_rate,

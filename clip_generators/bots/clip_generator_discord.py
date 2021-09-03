@@ -13,10 +13,9 @@ import progressbar
 from discord import Thread
 from discord.abc import Messageable
 
-from clip_generators.models.taming_transformers.clip_generator.dreamer import load_vqgan_model
-from clip_generators.models.taming_transformers.clip_generator.trainer import Trainer
+from clip_generators.bots.generator import Generator
+from clip_generators.bots.miner import Miner
 from clip_generators.utils import GenerationArgs, parse_prompt_args
-from clip_generators.models.guided_diffusion_hd.clip_guided import Trainer as Diffusion_trainer
 from clip_generators.utils import make_arguments_parser
 
 
@@ -28,12 +27,13 @@ class DreamerClient(discord.Client):
         self.current_user = None
         self.stop_flag = False
         self.commands = self.make_commands()
+
+        self.arguments = None
         self.generating = False
         self.generating_thread = None
 
-        self.miner = None
-        self.miner_thread = threading.Thread(target=self.mine)
-        self.miner_thread.start()
+        self.miner_enabled = True
+        self.miner = Miner('/home/lleonard/t-rex/launch.sh')
 
     async def on_ready(self):
         print(f'{self.user} has connected to Discord!')
@@ -45,36 +45,29 @@ class DreamerClient(discord.Client):
             '!stop': self.stop_command,
             '!leave': self.leave_command,
             '!help': self.help_command,
+            '!mine': self.mine_command,
         }
 
     async def on_message(self, message: discord.Message):
-        # Thread
         if isinstance(message.channel, Thread):
             return
         if message.author == self.user:
             return
 
-        print(f'{message.channel!r}')
-
+        print(message.content)
         args = message.content.split()
         if args[0] in self.commands:
             self.commands[args[0]](message)
 
-    def mine(self):
-        while True:
-            if not self.generating:
-                if self.miner is None:
-                    print('starting miner...')
-                    bar = progressbar.ProgressBar(max_value=progressbar.UnknownLength)
-                    i = 0
-                    self.miner = subprocess.Popen(TOKEN = os.getenv('MINER_PATH'), shell=True, stdout=subprocess.PIPE)
-            if self.miner is not None:
-                bar.update(i)
-                i = i + 1
-            time.sleep(1)
+    def mine_command(self, message):
+        prompt = message.content[len("!mine"):]
+        if prompt == 'enabled':
+            self.miner.start()
+        elif prompt == 'disabled':
+            self.miner.stop()
 
     def help_command(self, message: discord.Message):
-        self.loop.create_task(message.channel.send(make_arguments_parser().usage))
+        self.loop.create_task(message.channel.send(make_arguments_parser().usage()))
 
     def stop_command(self, message: discord.Message):
         if self.current_user == message.author:
@@ -85,14 +78,12 @@ class DreamerClient(discord.Client):
     def leave_command(self, message: discord.Message):
         self.loop.create_task( message.guild.leave())
 
-
     def generate_command(self, message: discord.Message):
         if self.generating:
             self.loop.create_task(message.channel.send(f'already generating for {self.current_user}'))
             return
 
-        self.miner.terminate()
-        self.miner = None
+        self.miner.stop()
 
         prompt = message.content[len("!generate"):]
         if '--prompt' in prompt:
@@ -107,88 +98,49 @@ class DreamerClient(discord.Client):
             arguments.prompts = [(prompt, 1.0)]
 
         self.current_user = message.author
-        if arguments.network_type == 'diffusion':
-            trainer = self.generate_image_diffusion(arguments)
-        else:
-            trainer = self.generate_image(arguments)
+        dreamer = Generator(arguments, self.clip, str(self.current_user)).dreamer
+
         self.arguments = arguments
-
-
         self.stop_flag = False
         self.generating = True
 
-        self.generating_thread = threading.Thread(target=self.train, args=(trainer, message))
-        self.generating_thread.start()
+        self.loop.create_task(self.generate(dreamer, message))
 
 
+    async def send_progress(self, dreamer, channel, iteration):
+        if iteration == dreamer.steps:
+            await channel.send(dreamer.prompt)
+        await channel.send(f'step {iteration} / {dreamer.steps}', file=discord.File(dreamer.get_generated_image_path()))
 
-    async def send_progress(self, trainer, channel, iteration):
-        if iteration == trainer.steps:
-            await channel.send(trainer.prompt)
-        await channel.send(f'step {iteration} / {trainer.steps}', file=discord.File(trainer.get_generated_image_path()))
-
-    async def _train(self, trainer, message: discord.Message):
+    async def generate(self, dreamer, message: discord.Message):
         if message.guild is not None:
-            channel = await message.create_thread(name=trainer.prompt, )
+            channel = await message.create_thread(name=dreamer.prompt, )
         else:
             channel = message.channel
         self.loop.create_task(channel.send('arguments = ' + str(self.arguments)))
         await channel.send('generating...')
         now = datetime.datetime.now()
         try:
-            for it in trainer.epoch():
+            for it in dreamer.epoch():
                 if it % 100 == 0 or it < 0:
-                    await self.send_progress(trainer, channel, it)
+                    await self.send_progress(dreamer, channel, it)
                 await asyncio.sleep(0)
                 if self.stop_flag:
                     break
 
             await channel.send('Done !')
-            trainer.close()
-            shutil.copy(trainer.get_generated_image_path(),
-                        f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{trainer.prompt.replace("//", "_")}.png')
-            await self.send_progress(trainer, channel, trainer.steps)
-            await message.reply(f'', file=discord.File(trainer.get_generated_image_path()))
+            dreamer.close()
+            shutil.copy(dreamer.get_generated_image_path(),
+                        f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{dreamer.prompt.replace("//", "_")}.png')
+            await self.send_progress(dreamer, channel, dreamer.steps)
+            await message.reply(f'', file=discord.File(dreamer.get_generated_image_path()))
+
         except Exception as ex:
             print(ex)
             await channel.send(str(ex))
+
         self.generating = False
-
-    def train(self, trainer, message: discord.Message):
-        self.loop.create_task(self._train(trainer, message))
-
-    def generate_image_diffusion(self, arguments: GenerationArgs):
-        now = datetime.datetime.now()
-
-        trainer = Diffusion_trainer(arguments.prompts,
-                                    self.clip,
-                                    init_image=arguments.resume_from,
-                                    ddim_respacing=arguments.ddim_respacing,
-                                    seed=arguments.seed,
-                                    steps=arguments.steps,
-                                    outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{arguments.prompts[0][0]}',
-                                    skip_timesteps=arguments.skips,
-                                    )
-        return trainer
-
-    def generate_image(self, arguments: GenerationArgs):
-        now = datetime.datetime.now()
-        trainer = Trainer(arguments.prompts,
-                          vqgan_model=load_vqgan_model(arguments.config, arguments.checkpoint).to('cuda'),
-                          clip_model=self.clip,
-                          learning_rate=arguments.learning_rate,
-                          save_every=arguments.refresh_every,
-                          outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{arguments.prompts[0][0]}',
-                          device='cuda:0',
-                          image_size=(400, 400),
-                          crazy_mode=arguments.crazy_mode,
-                          cutn=arguments.cut,
-                          steps=arguments.steps,
-                          full_image_loss=True,
-                          nb_augments=1,
-                          init_image=arguments.resume_from,
-                          )
-        return trainer
+        self.miner.start()
 
 
 TOKEN = os.getenv('DISCORD_API_KEY')
