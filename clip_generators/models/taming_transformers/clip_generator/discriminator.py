@@ -57,18 +57,18 @@ class ClipDiscriminator(nn.Module):
             self.make_cutouts = MakeCutouts(clip_model.visual.input_resolution, cutn, cut_pow=cut_pow)
         else:
             self.make_cutouts = None
-        self.augmentations = DifferentiableAugmentations(cutn)
+        self.augmentations = DifferentiableAugmentations(cutn, full_image_loss)
         self.nb_augments = nb_augments
         self.full_image_loss = full_image_loss
 
         if len(texts) > 1:
             self.embeds.append(AveragedEmbeddedTexts(torch.cat(
-                [self.clip.encode_text(clip.tokenize(text.strip()).to(device)).float()
+                [self.clip.encode_text(clip.tokenize(text[0].strip()).to(device)).float()
                  for text in texts]
             )).cuda())
         for text in texts:
-            embed = self.clip.encode_text(clip.tokenize(text.strip()).to(device)).float()
-            self.embeds.append(EmbeddedText(embed).cuda())
+            embed = self.clip.encode_text(clip.tokenize(text[0].strip()).to(device)).float()
+            self.embeds.append(EmbeddedText(embed, float(text[1])).cuda())
 
     def forward(self, x):
         image_features: Any

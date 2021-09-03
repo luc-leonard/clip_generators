@@ -3,21 +3,24 @@ import os
 import time
 import urllib.request
 from pathlib import Path
-from typing import io
-
+from typing import io as typing_io, List, Tuple, Optional
+import io
 import clip
 import imageio
 import numpy as np
+import requests
 import torch
-from google.auth.transport import requests
+import PIL.Image
 from progressbar import progressbar
+from torch import nn
 from torch.nn import functional as F
 from torchvision import transforms
 from torchvision.transforms import functional as TF
 
 from clip_generators.models.guided_diffusion_hd.guided_diffusion.guided_diffusion.script_util import \
     create_model_and_diffusion, model_and_diffusion_defaults
-from clip_generators.models.taming_transformers.clip_generator.utils import MakeCutouts
+from clip_generators.models.guided_diffusion_hd.discriminator import ClipDiscriminator
+from clip_generators.utils import fetch
 
 
 def spherical_dist_loss(x, y):
@@ -51,62 +54,71 @@ def make_model(the_model_config):
     for name, param in model.named_parameters():
         if 'qkv' in name or 'norm' in name or 'proj' in name:
             param.requires_grad_()
-    if model_config['use_fp16']:
+    if the_model_config['use_fp16']:
         model.convert_to_fp16()
 
     return model, diffusion
 
 
-model_config = model_and_diffusion_defaults()
-model_config.update({
-    'attention_resolutions': '32, 16, 8',
-    'class_cond': False,
-    'diffusion_steps': 1000,
-    'rescale_timesteps': True,
-    'timestep_respacing': '1000',  # Modify this value to decrease the number of
-    # timesteps.
-    'image_size': 512,
-    'learn_sigma': True,
-    'noise_schedule': 'linear',
-    'num_channels': 256,
-    'num_head_channels': 64,
-    'num_res_blocks': 2,
-    'resblock_updown': True,
-    'use_fp16': True,
-    'use_scale_shift_norm': True,
-})
-
-model, diffusion = make_model(model_config)
 normalize = transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073],
                                  std=[0.26862954, 0.26130258, 0.27577711])
 
 
-def generate(prompt: str, clip_model, out_dir: Path):
+def generate(prompts: List[Tuple[str, float]],
+             clip_model,
+             out_dir: Path,
+             ddim_respacing: bool = True,
+             init_image_url: Optional[str] = None, seed=None, steps=1000, skip_timesteps=0):
     batch_size = 1
     clip_guidance_scale = 1000
     tv_scale = 150
     cutn = 40
     cut_pow = 0.5
     n_batches = 1
-    init_image = None
-    skip_timesteps = 0
-    seed = None
+
+    model_config = model_and_diffusion_defaults()
+    model_config.update({
+        'attention_resolutions': '32, 16, 8',
+        'class_cond': False,
+        'diffusion_steps': steps,
+        'rescale_timesteps': True,
+        'timestep_respacing': 'ddim' + str(steps) if ddim_respacing else str(steps),
+        'image_size': 512,
+        'learn_sigma': True,
+        'noise_schedule': 'linear',
+        'num_channels': 256,
+        'num_head_channels': 64,
+        'num_res_blocks': 2,
+        'resblock_updown': True,
+        'use_fp16': True,
+        'use_scale_shift_norm': True,
+    })
+
+    model, diffusion = make_model(model_config)
 
     if seed is not None:
         torch.manual_seed(seed)
     else:
         torch.manual_seed(time.time())
 
-    clip_size = clip_model.visual.input_resolution
-    text_embed = clip_model.encode_text(clip.tokenize(prompt).to('cuda:0')).float()
-
+    discriminator = ClipDiscriminator(clip_model, prompts, cutn, cut_pow, 'cuda:0', False, 0)
     init = None
-    # if init_image is not None:
-    #     init = Image.open(fetch(init_image)).convert('RGB')
-    #     init = init.resize((model_config['image_size'], model_config['image_size']), Image.LANCZOS)
-    #     init = TF.to_tensor(init).to(device).unsqueeze(0).mul(2).sub(1)
+    print(init_image_url)
+    image_size = model_config['image_size']
+    if init_image_url is not None:
+        init_image: PIL.Image.Image = PIL.Image.open(fetch(init_image_url)).convert('RGB')
+        init_image.thumbnail((image_size, image_size))
+        init_image.save(f'./{str(out_dir)}/progress_latest.png')
+        print('saved init')
+        yield -1
+        resized_init_image = PIL.Image.new('RGB', (image_size, image_size), color=1)
 
-    make_cutouts = MakeCutouts(clip_size, cutn, cut_pow)
+        resized_init_image.paste(init)
+        resized_init_image = resized_init_image.resize((model_config['image_size'], model_config['image_size']), PIL.Image.LANCZOS)
+
+        init = TF.to_tensor(resized_init_image).to('cuda:0').unsqueeze(0).mul(2).sub(1)
+        init: torch.Tensor = (init * (torch.rand_like(init) * 0.5))
+
     cur_t = None
 
     def cond_fn(x, t, y=None):
@@ -117,11 +129,10 @@ def generate(prompt: str, clip_model, out_dir: Path):
             out = diffusion.p_mean_variance(model, x, my_t, clip_denoised=False, model_kwargs={'y': y})
             fac = diffusion.sqrt_one_minus_alphas_cumprod[cur_t]
             x_in = out['pred_xstart'] * fac + x * (1 - fac)
-            clip_in = normalize(make_cutouts(x_in.add(1).div(2)))
-            # clip_in = differentiable_augmentation(clip_in)
-            image_embeds = clip_model.encode_image(clip_in).float().view([cutn, n, -1])
-            dists = spherical_dist_loss(image_embeds, text_embed.unsqueeze(0))
-            losses = dists.mean(0)
+
+            dists = discriminator(x_in.add(1).div(2), n)
+
+            losses = torch.cat(dists).mean()
             tv_losses = tv_loss(x_in)
             loss = losses.sum() * clip_guidance_scale + tv_losses.sum() * tv_scale
             return -torch.autograd.grad(loss, x)[0]
@@ -155,20 +166,29 @@ def generate(prompt: str, clip_model, out_dir: Path):
                     video.append_data(np.array(image))
                 if j % 100 == 0 or cur_t == -1:
                     image.save(f'./{str(out_dir)}/progress_latest.png')
-                yield j
+                yield j + skip_timesteps
         video.close()
 
 
 class Trainer:
-    def __init__(self, prompt, clip_model, *, outdir: str, ):
-        self.prompt = prompt
+    def __init__(self, prompts, clip_model, *, outdir: str, init_image: Optional[str], ddim_respacing, seed, steps, skip_timesteps):
+        self.prompts = prompts
         self.clip = clip_model
-        self.prompts = [prompt]
         self.out_dir = Path(outdir)
+        self.init_image = init_image
+        self.ddim_respacing = ddim_respacing
+        self.seed = seed
+        self.steps = steps
+        self.skip_timesteps = skip_timesteps
+
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
     def epoch(self):
-        return generate(self.prompt, self.clip, self.out_dir)
+        return generate(self.prompts, self.clip, self.out_dir,
+                        init_image_url=self.init_image,
+                        ddim_respacing=self.ddim_respacing,
+                        seed=self.seed,
+                        steps=self.steps, skip_timesteps=self.skip_timesteps)
 
     def get_generated_image_path(self) -> Path:
         return self.out_dir / 'progress_latest.png'
@@ -176,7 +196,7 @@ class Trainer:
     def close(self):
         ...
 
-    # the diffusion model has a fixed amount of steps
     @property
-    def steps(self):
-        return 1000
+    def prompt(self):
+        return self.prompts[0][0]
+
