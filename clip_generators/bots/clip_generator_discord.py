@@ -67,7 +67,7 @@ class DreamerClient(discord.Client):
                     print('starting miner...')
                     bar = progressbar.ProgressBar(max_value=progressbar.UnknownLength)
                     i = 0
-                    self.miner = subprocess.Popen('/home/lleonard/t-rex/launch.sh', shell=True, stdout=subprocess.PIPE)
+                    self.miner = subprocess.Popen(TOKEN = os.getenv('MINER_PATH'), shell=True, stdout=subprocess.PIPE)
             if self.miner is not None:
                 bar.update(i)
                 i = i + 1
@@ -106,14 +106,14 @@ class DreamerClient(discord.Client):
             arguments = parse_prompt_args('--prompt "osef;1"')
             arguments.prompts = [(prompt, 1.0)]
 
-
+        self.current_user = message.author
         if arguments.network_type == 'diffusion':
             trainer = self.generate_image_diffusion(arguments)
         else:
             trainer = self.generate_image(arguments)
         self.arguments = arguments
 
-        self.current_user = message.author
+
         self.stop_flag = False
         self.generating = True
 
