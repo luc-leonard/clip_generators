@@ -3,6 +3,7 @@ import datetime
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from typing import Dict, Callable
@@ -43,9 +44,10 @@ class DreamerClient(discord.Client):
             '!generate': self.generate_command,
             '!generate_legacy': self.generate_command,
             '!stop': self.stop_command,
-            '!leave': self.leave_command,
+           # '!leave': self.leave_command,
             '!help': self.help_command,
             '!mine': self.mine_command,
+            '!restart': self.restart_command
         }
 
     async def on_message(self, message: discord.Message):
@@ -58,6 +60,10 @@ class DreamerClient(discord.Client):
         args = message.content.split()
         if args[0] in self.commands:
             self.commands[args[0]](message)
+
+    def restart_command(self, message):
+        self.miner.stop()
+        os.execv(sys.argv[0], sys.argv)
 
     def mine_command(self, message):
         prompt = message.content[len("!mine"):]
@@ -76,7 +82,7 @@ class DreamerClient(discord.Client):
             self.loop.create_task(message.channel.send(f'Only {self.current_user} can stop me'))
 
     def leave_command(self, message: discord.Message):
-        self.loop.create_task( message.guild.leave())
+        self.loop.create_task(message.guild.leave())
 
     def generate_command(self, message: discord.Message):
         if self.generating:
