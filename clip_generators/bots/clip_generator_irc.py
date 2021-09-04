@@ -8,6 +8,7 @@ import clip
 import irc
 import irc.bot
 
+from bots.generator import Generator
 from clip_generators.models.guided_diffusion_hd.clip_guided import Dreamer as Diffusion_trainer
 from clip_generators.models.taming_transformers.clip_generator.generator import load_vqgan_model
 from clip_generators.models.taming_transformers.clip_generator.dreamer import Dreamer
@@ -46,35 +47,7 @@ class IrcBot(irc.bot.SingleServerIRCBot):
         self.generating = None
         c.privmsg(self.channel, f'Generation done. Ready to take an order')
         shutil.copy(trainer.get_generated_image_path(),
-                    f'./irc_out/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{trainer.prompts[0].replace("//", "_")}.png')
-
-    def generate_image(self, arguments: GenerationArgs):
-        vqgan_model = load_vqgan_model(arguments.config, arguments.checkpoint).to('cuda')
-        now = datetime.datetime.now()
-        trainer = Dreamer([arguments.prompt],
-                          vqgan_model,
-                          self.clip,
-                          learning_rate=arguments.learning_rate,
-                          save_every=arguments.refresh_every,
-                          outdir=f'./irc_out/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{arguments.prompt}',
-                          device='cuda:0',
-                          image_size=(640, 640),
-                          crazy_mode=arguments.crazy_mode,
-                          cutn=arguments.cut,
-                          steps=arguments.steps,
-                          full_image_loss=arguments.full_image_loss,
-                          nb_augments=arguments.nb_augments,
-                          )
-        return trainer
-
-    def generate_image_diffusion(self, arguments: GenerationArgs):
-        print(arguments)
-        now = datetime.datetime.now()
-        trainer = Diffusion_trainer(arguments.prompt.split('||')[0], self.clip,
-                                    outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{arguments.prompt}',
-                                    init_image=arguments.resume_from,
-                                    )
-        return trainer
+                    f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{trainer.prompts[0].replace("//", "_")}.png')
 
     def on_pubmsg(self, c, e):
         text = e.arguments[0]
@@ -90,11 +63,13 @@ class IrcBot(irc.bot.SingleServerIRCBot):
             except Exception as ex:
                 c.privmsg(e.target, str(ex))
                 return
-            c.privmsg(e.target, f'generating {arguments.prompt}')
+            c.privmsg(e.target, f'generating {arguments.prompts[0]}')
             trainer = self.generate_image_diffusion(arguments)
             generated_image_path = trainer.get_generated_image_path()
             c.privmsg(e.target,
                       f'{prompt} => http://82.65.144.151:8082/{urllib.parse.quote(str(generated_image_path.relative_to(".")))}')
+
+            trainer = Generator(arguments, self.clip, e.source).dreamer
             self.generating = prompt
             self.stop_generating = False
             self.current_generating_user = e.source

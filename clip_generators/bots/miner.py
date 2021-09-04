@@ -38,6 +38,8 @@ class Miner:
                         i = 0
                         self.miner = subprocess.Popen(self.mining_command, shell=True, stdout=f)
                         print('miner pid: ', self.miner.pid)
+                        # lets give some time to the process to start :)
+                        time.sleep(1)
                     if self.miner is not None:
                         if self.miner.poll() is not None:
                             # miner crashed
