@@ -1,16 +1,20 @@
 import asyncio
 import datetime
+import gc
+import json
 import os
 import shutil
 import subprocess
 import sys
 import threading
 import time
+import traceback
 from typing import Dict, Callable
 
 import clip
 import discord
 import progressbar
+import torch
 from discord import Thread
 from discord.abc import Messageable
 
@@ -106,6 +110,7 @@ class DreamerClient(discord.Client):
         self.current_user = message.author
         dreamer = Generator(arguments, self.clip, str(self.current_user)).dreamer
 
+        (dreamer.outdir / 'args.txt').write_text(arguments.json())
         self.arguments = arguments
         self.stop_flag = False
         self.generating = True
@@ -143,9 +148,13 @@ class DreamerClient(discord.Client):
 
         except Exception as ex:
             print(ex)
+            print(traceback.format_exc())
             await channel.send(str(ex))
 
         self.generating = False
+        del dreamer
+        torch.cuda.empty_cache()
+        gc.collect()
         self.miner.start()
 
 

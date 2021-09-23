@@ -1,4 +1,5 @@
 import itertools
+import json
 import os
 import sys
 import time
@@ -27,7 +28,7 @@ def network_list():
     return {
         'ffhq': {
             'config': models_path / 'ffhq' / 'configs' / '2020-11-13T21-41-45-project.yaml',
-            'checkpoint': models_path / 'ffhq' / 'checkpoints' / 'last.ckpt'
+            'checkpoint': models_path / 'ffhq' / 'checkpoints' / 'last_1.ckpt'
         },
         'imagenet': {
             'config': models_path / 'imagenet' / 'vqgan_imagenet_f16_16384.yaml',
@@ -60,14 +61,20 @@ class Dreamer:
                  crazy_mode=False,
                  nb_augments=3,
                  full_image_loss=True,
-                 save_every=50,init_image =None):
+                 save_every=50,
+                 init_image=None,
+                 init_noise_factor=0.):
 
         if seed is None:
-            torch.manual_seed(int(time.time()))
-        else:
-            torch.manual_seed(seed)
-        self.save_every = save_every
+            seed = int(time.time())
+        torch.manual_seed(seed)
+
         self.outdir = Path(outdir)
+        self.outdir.mkdir(exist_ok=True, parents=True)
+
+        self.save_every = save_every
+
+
         if steps is None:
             self.iterator = itertools.count(start=0)
         else:
@@ -75,13 +82,16 @@ class Dreamer:
         self.steps = steps
         self.prompts = prompts
         self.prompt = prompts[0][0]
-        self.outdir.mkdir(exist_ok=True, parents=True)
+
         self.clip_discriminator = ClipDiscriminator(clip_model, prompts, cutn, cut_pow, device,
                                                     full_image_loss=full_image_loss,
-                                                    nb_augments=nb_augments )
+                                                    nb_augments=nb_augments)
 
         self.generator = Generator(vqgan_model).to(device)
-        self.z_space = ZSpace(vqgan_model, image_size, device=device, init_image=init_image)
+        self.z_space = ZSpace(self.generator, image_size, device=device, init_image=init_image, init_noise_factor=init_noise_factor)
+        if init_image is not None:
+            self.z_space.base_image.save(str(self.outdir / 'base.png'))
+            TF.to_pil_image(self.z_space.base_image_decoded[0].cpu()).save(str(self.outdir / 'projection.png'))
         self.optimizer = optim.Adam([self.z_space.z], lr=learning_rate)
         self.scheduler = None
         if crazy_mode is True and steps is not None:
@@ -107,10 +117,13 @@ class Dreamer:
         self.video.close()
 
     def epoch(self):
+        loss = torch.nn.MSELoss()
         for i in progressbar(self.iterator):
             self.optimizer.zero_grad()
             generated_image = self.generator(self.z_space.z)
             losses = self.clip_discriminator(generated_image)
+            if self.z_space.base_image is not None and self.clip_discriminator.full_image_loss:
+                losses.append(loss(generated_image, self.z_space.base_image_decoded) * 0.5)
             if i % self.save_every == 0:
                 self.save_image(i, generated_image, losses)
             yield i

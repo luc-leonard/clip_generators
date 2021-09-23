@@ -105,7 +105,7 @@ def generate(prompts: List[Tuple[str, float]],
 
     discriminator = ClipDiscriminator(clip_model, prompts, cutn, cut_pow, 'cuda:0', False, 0)
     init = None
-    print(init_image_url)
+
     image_size = model_config['image_size']
     if init_image_url is not None:
         init_image: PIL.Image.Image = PIL.Image.open(fetch(init_image_url)).convert('RGB')
@@ -171,6 +171,7 @@ def generate(prompts: List[Tuple[str, float]],
                 yield j + skip_timesteps
         video.close()
         del model
+        torch.cuda.empty_cache()
         gc.collect()
 
 
@@ -178,24 +179,24 @@ class Dreamer:
     def __init__(self, prompts, clip_model, *, outdir: str, init_image: Optional[str], ddim_respacing, seed, steps, skip_timesteps):
         self.prompts = prompts
         self.clip = clip_model
-        self.out_dir = Path(outdir)
+        self.outdir = Path(outdir)
         self.init_image = init_image
         self.ddim_respacing = ddim_respacing
         self.seed = seed
         self.steps = steps
         self.skip_timesteps = skip_timesteps
 
-        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.outdir.mkdir(parents=True, exist_ok=True)
 
     def epoch(self):
-        return generate(self.prompts, self.clip, self.out_dir,
+        return generate(self.prompts, self.clip, self.outdir,
                         init_image_url=self.init_image,
                         ddim_respacing=self.ddim_respacing,
                         seed=self.seed,
                         steps=self.steps, skip_timesteps=self.skip_timesteps)
 
     def get_generated_image_path(self) -> Path:
-        return self.out_dir / 'progress_latest.png'
+        return self.outdir / 'progress_latest.png'
 
     def close(self):
         ...

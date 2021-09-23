@@ -40,6 +40,7 @@ class GenerationArgs(BaseModel):
     ddim_respacing: bool = False
     seed: int
     skips: int
+    init_noise_factor: float = 0.0
 
     @property
     def config(self):
@@ -60,15 +61,16 @@ def make_arguments_parser() -> argparse.ArgumentParser:
     parser.add_argument('--prompt', action='append', required=True)
     parser.add_argument('--cut', type=int, default=64)
     parser.add_argument('--transforms', type=int, default=1)
-    parser.add_argument('--full-image-loss', type=bool, default=True)
+    parser.add_argument('--full-image-loss', type=bool, default=False)
     parser.add_argument('--network', type=str, default='imagenet')
     parser.add_argument('--network-type', type=str, default='diffusion')
     parser.add_argument('--ddim', dest='ddim_respacing', action='store_true')
     parser.add_argument('--no-ddim', dest='ddim_respacing', action='store_false')
     parser.add_argument('--seed', type=int, default=int(time.time()))
     parser.add_argument('--skip', type=int, default=0)
+    parser.add_argument('--init-noise-factor', type=float, default=0.0)
 
-    parser.set_defaults(ddim_respacing=False)
+    parser.set_defaults(ddim_respacing=False, add_noise_to_init=False)
     return parser
 
 def parse_prompt_args(prompt: str = '') -> GenerationArgs:
@@ -89,6 +91,7 @@ def parse_prompt_args(prompt: str = '') -> GenerationArgs:
                               ddim_respacing=parsed_args.ddim_respacing,
                               seed=parsed_args.seed,
                               skips=parsed_args.skip,
+                              init_noise_factor=parsed_args.init_noise_factor
                               )
         args.prompts = []
         for the_prompt in parsed_args.prompt:

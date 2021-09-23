@@ -32,7 +32,9 @@ def load_vqgan_model(config_path, checkpoint_path):
 class Generator(nn.Module):
     def __init__(self, model):
         super().__init__()
-        self.model = model.eval()
+        self.model = model
+
+        self.model.eval()
 
     def forward(self, z):
         z_q = vector_quantize(z.movedim(1, 3), self.model.quantize.embedding.weight).movedim(3, 1)
@@ -49,8 +51,10 @@ def fetch(url_or_path):
     return open(url_or_path, 'rb')
 
 class ZSpace(nn.Module):
-    def __init__(self, model, image_size, device, init_image):
+    def __init__(self, generator, image_size, device, init_image, init_noise_factor):
         super().__init__()
+
+        model = generator.model
         self.z_min = model.quantize.embedding.weight.min(dim=0).values[None, :, None, None]
         self.z_max = model.quantize.embedding.weight.max(dim=0).values[None, :, None, None]
 
@@ -63,9 +67,16 @@ class ZSpace(nn.Module):
         if init_image:
             sideX, sideY = toksX * f, toksY * f
             pil_image = PIL.Image.open(fetch(init_image)).convert('RGB')
-            pil_image = pil_image.resize((sideX, sideY), PIL.Image.LANCZOS)
-            self.z, *_ = model.encode(TF.to_tensor(pil_image).to(device).unsqueeze(0) * 2 - 1)
+            pil_image.thumbnail((sideX, sideY))
+            self.base_image = pil_image
+            base_image = TF.to_tensor(pil_image).to(device).unsqueeze(0) * 2 - 1
+            self.base_image_decoded = generator(model.encode(base_image)[0])
+            if init_noise_factor > 0:
+                base_image = base_image * (torch.rand_like(base_image) * init_noise_factor)
+            self.z, *_ = model.encode(base_image)
+            self.clamp()
         else:
+            self.base_image = None
             one_hot = F.one_hot(torch.randint(n_toks, [toksY * toksX], device=device), n_toks).float()
             z = one_hot @ model.quantize.embedding.weight
             self.z = z.view([-1, toksY, toksX, model.quantize.e_dim]).permute(0, 3, 1, 2)

@@ -8,7 +8,8 @@ import clip
 import irc
 import irc.bot
 
-from bots.generator import Generator
+from clip_generators.bots.miner import Miner
+from clip_generators.bots.generator import Generator
 from clip_generators.models.guided_diffusion_hd.clip_guided import Dreamer as Diffusion_trainer
 from clip_generators.models.taming_transformers.clip_generator.generator import load_vqgan_model
 from clip_generators.models.taming_transformers.clip_generator.dreamer import Dreamer
@@ -26,6 +27,8 @@ class IrcBot(irc.bot.SingleServerIRCBot):
         self.stop_generating = False
         print('loading clip')
         self.clip = clip.load('ViT-B/16', jit=False)[0].eval().requires_grad_(False).to('cuda:0')
+        self.miner = Miner('/home/lleonard/t-rex/launch.sh')
+        self.miner.start()
 
     def on_nicknameinuse(self, c: irc.client, e):
         c.nick(c.get_nickname() + "_")
@@ -44,16 +47,18 @@ class IrcBot(irc.bot.SingleServerIRCBot):
             if it % 100 == 0:
                 c.privmsg(self.channel, f'generation {it}/{trainer.steps}')
         trainer.close()
+        self.miner.start()
         self.generating = None
         c.privmsg(self.channel, f'Generation done. Ready to take an order')
         shutil.copy(trainer.get_generated_image_path(),
-                    f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{trainer.prompts[0].replace("//", "_")}.png')
+                    f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{trainer.prompts[0][0].replace("//", "_")}.png')
 
     def on_pubmsg(self, c, e):
         text = e.arguments[0]
         args = text.split()
 
         if args[0] == '!' + 'generate':
+            self.miner.stop()
             if self.generating is not None:
                 c.privmsg(e.target, f'currently generating {self.generating}, try again later.')
                 return
@@ -64,12 +69,12 @@ class IrcBot(irc.bot.SingleServerIRCBot):
                 c.privmsg(e.target, str(ex))
                 return
             c.privmsg(e.target, f'generating {arguments.prompts[0]}')
-            trainer = self.generate_image_diffusion(arguments)
+            trainer = Generator(arguments, self.clip, '__IRC__').dreamer
             generated_image_path = trainer.get_generated_image_path()
             c.privmsg(e.target,
-                      f'{prompt} => http://82.65.144.151:8082/{urllib.parse.quote(str(generated_image_path.relative_to(".")))}')
+                      f'{prompt} => http://home.luc-leonard.fr:8082/{urllib.parse.quote(str(generated_image_path.relative_to(".")))}')
 
-            trainer = Generator(arguments, self.clip, e.source).dreamer
+
             self.generating = prompt
             self.stop_generating = False
             self.current_generating_user = e.source

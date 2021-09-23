@@ -41,7 +41,9 @@ class Miner:
                         # lets give some time to the process to start :)
                         time.sleep(1)
                     if self.miner is not None:
-                        if self.miner.poll() is not None:
+                        status = self.miner.poll()
+                        if status is not None:
+                            print(status)
                             # miner crashed
                             self.miner = None
                         bar.update(i)

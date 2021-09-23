@@ -38,12 +38,13 @@ class Generator:
                           save_every=arguments.refresh_every,
                           outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}',
                           device='cuda:0',
-                          image_size=(400, 400),
+                          image_size=(700, 700),
                           crazy_mode=arguments.crazy_mode,
                           cutn=arguments.cut,
                           steps=arguments.steps,
                           full_image_loss=True,
                           nb_augments=1,
                           init_image=arguments.resume_from,
+                          init_noise_factor=arguments.init_noise_factor
                           )
         return trainer
