@@ -113,13 +113,11 @@ def generate(prompts: List[Tuple[str, float]],
         init_image.save(f'./{str(out_dir)}/progress_latest.png')
         print('saved init')
         yield -1
-        resized_init_image = PIL.Image.new('RGB', (image_size, image_size), color=1)
-
-        resized_init_image.paste(init)
-        resized_init_image = resized_init_image.resize((model_config['image_size'], model_config['image_size']), PIL.Image.LANCZOS)
-
-        init = TF.to_tensor(resized_init_image).to('cuda:0').unsqueeze(0).mul(2).sub(1)
-        init: torch.Tensor = (init * (torch.rand_like(init) * 0.5))
+        init_image.thumbnail((512, 512))
+        init_image_tmp = PIL.Image.new('RGB', (512, 512))
+        init_image_tmp.paste(init_image)
+        init_image = init_image_tmp
+        init = TF.to_tensor(init_image).to('cuda:0').unsqueeze(0).mul(2).sub(1)
 
     cur_t = None
 

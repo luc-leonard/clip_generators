@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import gc
+import io
 import json
 import os
 import shutil
@@ -11,6 +12,7 @@ import time
 import traceback
 from typing import Dict, Callable
 
+import PIL
 import clip
 import discord
 import progressbar
@@ -22,6 +24,7 @@ from clip_generators.bots.generator import Generator
 from clip_generators.bots.miner import Miner
 from clip_generators.utils import GenerationArgs, parse_prompt_args
 from clip_generators.utils import make_arguments_parser
+from clip_generators.models.upscaler.upscaler import upscale
 
 
 class DreamerClient(discord.Client):
@@ -138,13 +141,23 @@ class DreamerClient(discord.Client):
                 await asyncio.sleep(0)
                 if self.stop_flag:
                     break
-
-            await channel.send('Done !')
             dreamer.close()
-            shutil.copy(dreamer.get_generated_image_path(),
-                        f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{dreamer.prompt.replace("//", "_")}.png')
-            await self.send_progress(dreamer, channel, dreamer.steps)
-            await message.reply(f'', file=discord.File(dreamer.get_generated_image_path()))
+
+            await channel.send('Done generating !', file=discord.File(dreamer.get_generated_image_path()))
+            await channel.send('Upscaling...')
+
+            lr_path = f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{dreamer.prompt.replace("//", "_")}.png'
+            hd_path = f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{dreamer.prompt.replace("//", "_")}_hd.png'
+            shutil.copy(dreamer.get_generated_image_path(), lr_path)
+
+            upscale(lr_path, hd_path)
+            hd_image = PIL.Image.open(hd_path)
+            hd_image.thumbnail((1024, 1024))
+            stream = io.BytesIO()
+
+            hd_image.save(stream, format='PNG')
+            stream.seek(0)
+            await message.reply(f'', files=[discord.File(stream, filename='upsampled.png')])
 
         except Exception as ex:
             print(ex)

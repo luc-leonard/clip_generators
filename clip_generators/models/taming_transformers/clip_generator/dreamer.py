@@ -96,7 +96,7 @@ class Dreamer:
         self.scheduler = None
         if crazy_mode is True and steps is not None:
            self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr=learning_rate * 10, total_steps=steps)
-        self.video = imageio.get_writer(f'{outdir}/out.mp4', mode='I', fps=5, codec='libx264', bitrate='16M')
+        self.video = imageio.get_writer(f'{outdir}/out.mp4', mode='I', fps=25, codec='libx264', bitrate='16M')
 
     def get_generated_image_path(self):
         return self.outdir / f'progress_latest.png'
@@ -106,7 +106,6 @@ class Dreamer:
         losses_str = ', '.join(f'{loss.item():g}' for loss in losses)
         print(f'i: {i}, loss: {sum(losses).item():g}, losses: {losses_str}')
         pil_image = TF.to_pil_image(generated_image[0].cpu())
-        self.video.append_data(np.array(pil_image))
         pil_image.save(str(self.outdir / f'progress_latest.png'))
 
     def start(self):
@@ -126,6 +125,7 @@ class Dreamer:
                 losses.append(loss(generated_image, self.z_space.base_image_decoded) * 0.5)
             if i % self.save_every == 0:
                 self.save_image(i, generated_image, losses)
+            self.video.append_data(np.array(TF.to_pil_image(generated_image[0].cpu())))
             yield i
 
             sum(losses).backward()

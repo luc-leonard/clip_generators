@@ -1,4 +1,5 @@
 import io
+from typing import Union
 
 import requests
 from omegaconf import OmegaConf
@@ -41,6 +42,8 @@ class Generator(nn.Module):
         return clamp_with_grad(self.model.decode(z_q).add(1).div(2), 0, 1)
 
 def fetch(url_or_path):
+    if isinstance(url_or_path, PIL.Image.Image):
+        return url_or_path
     if str(url_or_path).startswith('http://') or str(url_or_path).startswith('https://'):
         r = requests.get(url_or_path)
         r.raise_for_status()
@@ -51,7 +54,7 @@ def fetch(url_or_path):
     return open(url_or_path, 'rb')
 
 class ZSpace(nn.Module):
-    def __init__(self, generator, image_size, device, init_image, init_noise_factor):
+    def __init__(self, generator, image_size, device, init_image: Union[str, PIL.Image.Image], init_noise_factor):
         super().__init__()
 
         model = generator.model
@@ -66,7 +69,10 @@ class ZSpace(nn.Module):
         toksX, toksY = image_size[0] // f, image_size[1] // f
         if init_image:
             sideX, sideY = toksX * f, toksY * f
-            pil_image = PIL.Image.open(fetch(init_image)).convert('RGB')
+            if isinstance(init_image, str):
+                pil_image = PIL.Image.open(fetch(init_image)).convert('RGB')
+            else:
+                pil_image = init_image
             pil_image.thumbnail((sideX, sideY))
             self.base_image = pil_image
             base_image = TF.to_tensor(pil_image).to(device).unsqueeze(0) * 2 - 1
@@ -80,6 +86,7 @@ class ZSpace(nn.Module):
             one_hot = F.one_hot(torch.randint(n_toks, [toksY * toksX], device=device), n_toks).float()
             z = one_hot @ model.quantize.embedding.weight
             self.z = z.view([-1, toksY, toksX, model.quantize.e_dim]).permute(0, 3, 1, 2)
+
         self.z.requires_grad_(True)
 
     @torch.no_grad()

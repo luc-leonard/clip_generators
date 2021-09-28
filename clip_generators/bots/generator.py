@@ -21,30 +21,30 @@ class Generator:
         trainer = Diffusion_dreamer(arguments.prompts,
                                     self.clip,
                                     init_image=arguments.resume_from,
-                                    ddim_respacing=arguments.ddim_respacing,
+                                    ddim_respacing=arguments.model_arguments.dddim_respacing,
                                     seed=arguments.seed,
                                     steps=arguments.steps,
                                     outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}',
-                                    skip_timesteps=arguments.skips,
+                                    skip_timesteps=arguments.model_arguments.skips,
                                     )
         return trainer
 
     def make_dreamer_vqgan(self, arguments: GenerationArgs):
         now = datetime.datetime.now()
         trainer = Dreamer(arguments.prompts,
-                          vqgan_model=load_vqgan_model(arguments.config, arguments.checkpoint).to('cuda'),
+                          vqgan_model=load_vqgan_model(arguments.model_arguments.config, arguments.model_arguments.checkpoint).to('cuda'),
                           clip_model=self.clip,
-                          learning_rate=arguments.learning_rate,
+                          learning_rate=arguments.model_arguments.learning_rate,
                           save_every=arguments.refresh_every,
                           outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}',
                           device='cuda:0',
                           image_size=(700, 700),
-                          crazy_mode=arguments.crazy_mode,
+                          crazy_mode=arguments.model_arguments.crazy_mode,
                           cutn=arguments.cut,
                           steps=arguments.steps,
                           full_image_loss=True,
                           nb_augments=1,
                           init_image=arguments.resume_from,
-                          init_noise_factor=arguments.init_noise_factor
+                          init_noise_factor=arguments.model_arguments.init_noise_factor
                           )
         return trainer
