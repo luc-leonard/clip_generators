@@ -1,28 +1,209 @@
-import os
-import os
-import time
-import urllib.request
-from pathlib import Path
-from typing import io as typing_io, List, Tuple, Optional
+import gc
 import io
-import clip
-import imageio
-import numpy as np
+import math
+import os
+import sys
+import urllib
+from pathlib import Path
+from typing import List, Optional
+
+import lpips
+from PIL import Image, ImageOps
 import requests
 import torch
-import PIL.Image
-from progressbar import progressbar
 from torch import nn
 from torch.nn import functional as F
+import torchvision.transforms as T
+import torchvision.transforms.functional as TF
 from torchvision import transforms
-from torchvision.transforms import functional as TF
+from tqdm.notebook import tqdm
 
-from clip_generators.models.guided_diffusion_hd.guided_diffusion.guided_diffusion.script_util import \
-    create_model_and_diffusion, model_and_diffusion_defaults
-from clip_generators.models.guided_diffusion_hd.discriminator import ClipDiscriminator
-from clip_generators.utils import fetch
 
-import gc
+import clip
+from clip_generators.models.guided_diffusion_hd.guided_diffusion.guided_diffusion.script_util import create_model_and_diffusion, model_and_diffusion_defaults
+from datetime import datetime
+import numpy as np
+import random
+
+
+
+device = 'cuda:0'
+
+
+# 350/50/50/32 and 500/0/0/64 have worked well for 25 timesteps on 256px
+# Also, sometimes 1 cutn actually works out fine
+
+clip_guidance_scale = 5000 # 1000 - Controls how much the image should look like the prompt.
+tv_scale = 150 # 150 - Controls the smoothness of the final output.
+range_scale = 150 # 150 - Controls how far out of range RGB values are allowed to be.
+sat_scale = 0 # 0 - Controls how much saturation is allowed. From nshepperd's JAX notebook.
+cutn = 16 # 16 - Controls how many crops to take from the image.
+cutn_batches = 2 # 2 - Accumulate CLIP gradient from multiple batches of cuts [Can help with OOM errors / Low VRAM]
+
+init_image = None # None - URL or local path
+init_scale = 0 # 0 - This enhances the effect of the init image, a good value is 1000
+skip_timesteps = 6 # 0 - Controls the starting point along the diffusion timesteps
+perlin_init = True # False - Option to start with random perlin noise
+perlin_mode = 'mixed' # 'mixed' ('gray', 'color')
+
+skip_augs = False # False - Controls whether to skip torchvision augmentations
+randomize_class = True # True - Controls whether the imagenet class is randomly changed each iteration
+clip_denoised = False # False - Determines whether CLIP discriminates a noisy or denoised image
+clamp_grad = True # True - Experimental: Using adaptive clip grad in the cond_fn
+
+fuzzy_prompt = False # False - Controls whether to add multiple noisy prompts to the prompt losses
+rand_mag = 0.05 # 0.1 - Controls the magnitude of the random noise
+eta = 0.5 # 0.0 - DDIM hyperparameter
+
+
+display_rate = 50
+n_batches = 1 # 1 - Controls how many consecutive batches of images are generated
+batch_size = 1 # 1 - Controls how many images are generated in parallel in a batch
+
+normalize = T.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
+
+def interp(t):
+    return 3 * t**2 - 2 * t ** 3
+
+def perlin(width, height, scale=10, device=None):
+    gx, gy = torch.randn(2, width + 1, height + 1, 1, 1, device=device)
+    xs = torch.linspace(0, 1, scale + 1)[:-1, None].to(device)
+    ys = torch.linspace(0, 1, scale + 1)[None, :-1].to(device)
+    wx = 1 - interp(xs)
+    wy = 1 - interp(ys)
+    dots = 0
+    dots += wx * wy * (gx[:-1, :-1] * xs + gy[:-1, :-1] * ys)
+    dots += (1 - wx) * wy * (-gx[1:, :-1] * (1 - xs) + gy[1:, :-1] * ys)
+    dots += wx * (1 - wy) * (gx[:-1, 1:] * xs - gy[:-1, 1:] * (1 - ys))
+    dots += (1 - wx) * (1 - wy) * (-gx[1:, 1:] * (1 - xs) - gy[1:, 1:] * (1 - ys))
+    return dots.permute(0, 2, 1, 3).contiguous().view(width * scale, height * scale)
+
+def perlin_ms(octaves, width, height, grayscale, device=device):
+    out_array = [0.5] if grayscale else [0.5, 0.5, 0.5]
+    # out_array = [0.0] if grayscale else [0.0, 0.0, 0.0]
+    for i in range(1 if grayscale else 3):
+        scale = 2 ** len(octaves)
+        oct_width = width
+        oct_height = height
+        for oct in octaves:
+            p = perlin(oct_width, oct_height, scale, device)
+            out_array[i] += p * oct
+            scale //= 2
+            oct_width *= 2
+            oct_height *= 2
+    return torch.cat(out_array)
+
+def create_perlin_noise(octaves=[1, 1, 1, 1], width=2, height=2, grayscale=True, side_x=512, side_y=512):
+    out = perlin_ms(octaves, width, height, grayscale)
+    if grayscale:
+        out = TF.resize(size=(side_x, side_y), img=out.unsqueeze(0))
+        out = TF.to_pil_image(out.clamp(0, 1)).convert('RGB')
+    else:
+        out = out.reshape(-1, 3, out.shape[0]//3, out.shape[1])
+        out = TF.resize(size=(side_x, side_y), img=out)
+        out = TF.to_pil_image(out.clamp(0, 1).squeeze())
+
+    out = ImageOps.autocontrast(out)
+    return out
+
+def fetch(url_or_path):
+    if str(url_or_path).startswith('http://') or str(url_or_path).startswith('https://'):
+        r = requests.get(url_or_path)
+        r.raise_for_status()
+        fd = io.BytesIO()
+        fd.write(r.content)
+        fd.seek(0)
+        return fd
+    return open(url_or_path, 'rb')
+
+
+def parse_prompt(prompt):
+    if prompt.startswith('http://') or prompt.startswith('https://'):
+        vals = prompt.rsplit(':', 2)
+        vals = [vals[0] + ':' + vals[1], *vals[2:]]
+    else:
+        vals = prompt.rsplit(':', 1)
+    vals = vals + ['', '1'][len(vals):]
+    return vals[0], float(vals[1])
+
+def sinc(x):
+    return torch.where(x != 0, torch.sin(math.pi * x) / (math.pi * x), x.new_ones([]))
+
+def lanczos(x, a):
+    cond = torch.logical_and(-a < x, x < a)
+    out = torch.where(cond, sinc(x) * sinc(x/a), x.new_zeros([]))
+    return out / out.sum()
+
+def ramp(ratio, width):
+    n = math.ceil(width / ratio + 1)
+    out = torch.empty([n])
+    cur = 0
+    for i in range(out.shape[0]):
+        out[i] = cur
+        cur += ratio
+    return torch.cat([-out[1:].flip([0]), out])[1:-1]
+
+def resample(input, size, align_corners=True):
+    n, c, h, w = input.shape
+    dh, dw = size
+
+    input = input.reshape([n * c, 1, h, w])
+
+    if dh < h:
+        kernel_h = lanczos(ramp(dh / h, 2), 2).to(input.device, input.dtype)
+        pad_h = (kernel_h.shape[0] - 1) // 2
+        input = F.pad(input, (0, 0, pad_h, pad_h), 'reflect')
+        input = F.conv2d(input, kernel_h[None, None, :, None])
+
+    if dw < w:
+        kernel_w = lanczos(ramp(dw / w, 2), 2).to(input.device, input.dtype)
+        pad_w = (kernel_w.shape[0] - 1) // 2
+        input = F.pad(input, (pad_w, pad_w, 0, 0), 'reflect')
+        input = F.conv2d(input, kernel_w[None, None, None, :])
+
+    input = input.reshape([n, c, h, w])
+    return F.interpolate(input, size, mode='bicubic', align_corners=align_corners)
+
+class MakeCutouts(nn.Module):
+    def __init__(self, cut_size, cutn, skip_augs=False):
+        super().__init__()
+        self.cut_size = cut_size
+        self.cutn = cutn
+        self.skip_augs = skip_augs
+        self.augs = T.Compose([
+            T.RandomHorizontalFlip(p=0.5),
+            T.Lambda(lambda x: x + torch.randn_like(x) * 0.01),
+            T.RandomAffine(degrees=15, translate=(0.1, 0.1)),
+            T.Lambda(lambda x: x + torch.randn_like(x) * 0.01),
+            T.RandomPerspective(distortion_scale=0.4, p=0.7),
+            T.Lambda(lambda x: x + torch.randn_like(x) * 0.01),
+            T.RandomGrayscale(p=0.15),
+            T.Lambda(lambda x: x + torch.randn_like(x) * 0.01),
+            # T.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
+        ])
+
+    def forward(self, input):
+        input = T.Pad(input.shape[2]//4, fill=0)(input)
+        sideY, sideX = input.shape[2:4]
+        max_size = min(sideX, sideY)
+
+        cutouts = []
+        for ch in range(cutn):
+            if ch > cutn - cutn//4:
+                cutout = input.clone()
+            else:
+                size = int(max_size * torch.zeros(1,).normal_(mean=.8, std=.3).clip(float(self.cut_size/max_size), 1.))
+                offsetx = torch.randint(0, abs(sideX - size + 1), ())
+                offsety = torch.randint(0, abs(sideY - size + 1), ())
+                cutout = input[:, :, offsety:offsety + size, offsetx:offsetx + size]
+
+            if not self.skip_augs:
+                cutout = self.augs(cutout)
+            cutouts.append(resample(cutout, (self.cut_size, self.cut_size)))
+            del cutout
+
+        cutouts = torch.cat(cutouts, dim=0)
+        return cutouts
 
 
 def spherical_dist_loss(x, y):
@@ -36,7 +217,11 @@ def tv_loss(input):
     input = F.pad(input, (0, 1, 0, 1), 'replicate')
     x_diff = input[..., :-1, 1:] - input[..., :-1, :-1]
     y_diff = input[..., 1:, :-1] - input[..., :-1, :-1]
-    return (x_diff ** 2 + y_diff ** 2).mean([1, 2, 3])
+    return (x_diff**2 + y_diff**2).mean([1, 2, 3])
+
+
+def range_loss(input):
+    return (input - input.clamp(-1, 1)).pow(2).mean([1, 2, 3])
 
 
 def make_model(the_model_config):
@@ -61,30 +246,18 @@ def make_model(the_model_config):
 
     return model, diffusion
 
-
-normalize = transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073],
-                                 std=[0.26862954, 0.26130258, 0.27577711])
-
-
-def generate(prompts: List[Tuple[str, float]],
-             clip_model,
-             out_dir: Path,
-             ddim_respacing: bool = True,
-             init_image_url: Optional[str] = None, seed=None, steps=1000, skip_timesteps=0):
-    batch_size = 1
-    clip_guidance_scale = 1000
-    tv_scale = 150
-    cutn = 40
-    cut_pow = 0.5
-    n_batches = 1
+def do_run(prompts, clip_model, outdir, seed, steps):
+    timestep_respacing = 'ddim' + str(steps)  # Modify this value to decrease the number of timesteps.
+    # timestep_respacing = '25'
+    diffusion_steps = 1000
 
     model_config = model_and_diffusion_defaults()
     model_config.update({
         'attention_resolutions': '32, 16, 8',
         'class_cond': False,
-        'diffusion_steps': steps,
+        'diffusion_steps': diffusion_steps,
         'rescale_timesteps': True,
-        'timestep_respacing': 'ddim' + str(steps) if ddim_respacing else str(steps),
+        'timestep_respacing': timestep_respacing,
         'image_size': 512,
         'learn_sigma': True,
         'noise_schedule': 'linear',
@@ -96,28 +269,78 @@ def generate(prompts: List[Tuple[str, float]],
         'use_scale_shift_norm': True,
     })
 
+    side_x = side_y = model_config['image_size']
+
     model, diffusion = make_model(model_config)
 
+    clip_size = clip_model.visual.input_resolution
+    lpips_model = lpips.LPIPS(net='vgg').to(device)
+
+
+    loss_values = []
+
     if seed is not None:
+        np.random.seed(seed)
+        random.seed(seed)
         torch.manual_seed(seed)
-    else:
-        torch.manual_seed(time.time())
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
 
-    discriminator = ClipDiscriminator(clip_model, prompts, cutn, cut_pow, 'cuda:0', False, 0)
+    make_cutouts = MakeCutouts(clip_size, cutn, skip_augs=skip_augs)
+    target_embeds, weights = [], []
+
+    for prompt in prompts:
+        txt, weight = parse_prompt(prompt)
+        txt = clip_model.encode_text(clip.tokenize(prompt).to(device)).float()
+
+        if fuzzy_prompt:
+            for i in range(25):
+                target_embeds.append((txt + torch.randn(txt.shape).cuda() * rand_mag).clamp(0, 1))
+                weights.append(weight)
+        else:
+            target_embeds.append(txt)
+            weights.append(weight)
+
+    for prompt in []:
+        path, weight = parse_prompt(prompt)
+        img = Image.open(fetch(path)).convert('RGB')
+        img = TF.resize(img, min(side_x, side_y, *img.size), T.InterpolationMode.LANCZOS)
+        batch = make_cutouts(TF.to_tensor(img).to(device).unsqueeze(0).mul(2).sub(1))
+        embed = clip_model.encode_image(normalize(batch)).float()
+        if fuzzy_prompt:
+            for i in range(25):
+                target_embeds.append((embed + torch.randn(embed.shape).cuda() * rand_mag).clamp(0, 1))
+                weights.extend([weight / cutn] * cutn)
+        else:
+            target_embeds.append(embed)
+            weights.extend([weight / cutn] * cutn)
+
+    target_embeds = torch.cat(target_embeds)
+    weights = torch.tensor(weights, device=device)
+    if weights.sum().abs() < 1e-3:
+        raise RuntimeError('The weights must not sum to 0.')
+    weights /= weights.sum().abs()
+
     init = None
+    if init_image is not None:
+        init = Image.open(fetch(init_image)).convert('RGB')
+        init = init.resize((side_x, side_y), Image.LANCZOS)
+        init = TF.to_tensor(init).to(device).unsqueeze(0).mul(2).sub(1)
 
-    image_size = model_config['image_size']
-    if init_image_url is not None:
-        init_image: PIL.Image.Image = PIL.Image.open(fetch(init_image_url)).convert('RGB')
-        init_image.thumbnail((image_size, image_size))
-        init_image.save(f'./{str(out_dir)}/progress_latest.png')
-        print('saved init')
-        yield -1
-        init_image.thumbnail((512, 512))
-        init_image_tmp = PIL.Image.new('RGB', (512, 512))
-        init_image_tmp.paste(init_image)
-        init_image = init_image_tmp
-        init = TF.to_tensor(init_image).to('cuda:0').unsqueeze(0).mul(2).sub(1)
+    if perlin_init:
+        if perlin_mode == 'color':
+            init = create_perlin_noise([1.5 ** -i * 0.5 for i in range(12)], 1, 1, False, side_x, side_y)
+            init2 = create_perlin_noise([1.5 ** -i * 0.5 for i in range(8)], 4, 4, False, side_x, side_y)
+        elif perlin_mode == 'gray':
+            init = create_perlin_noise([1.5 ** -i * 0.5 for i in range(12)], 1, 1, True, side_x, side_y)
+            init2 = create_perlin_noise([1.5 ** -i * 0.5 for i in range(8)], 4, 4, True, side_x, side_y)
+        else:
+            init = create_perlin_noise([1.5 ** -i * 0.5 for i in range(12)], 1, 1, False, side_x, side_y)
+            init2 = create_perlin_noise([1.5 ** -i * 0.5 for i in range(8)], 4, 4, True, side_x, side_y)
+
+        # init = TF.to_tensor(init).add(TF.to_tensor(init2)).div(2).to(device)
+        init = TF.to_tensor(init).add(TF.to_tensor(init2)).div(2).to(device).unsqueeze(0).mul(2).sub(1)
+        del init2
 
     cur_t = None
 
@@ -125,17 +348,32 @@ def generate(prompts: List[Tuple[str, float]],
         with torch.enable_grad():
             x = x.detach().requires_grad_()
             n = x.shape[0]
-            my_t = torch.ones([n], device='cuda:0', dtype=torch.long) * cur_t
+            my_t = torch.ones([n], device=device, dtype=torch.long) * cur_t
             out = diffusion.p_mean_variance(model, x, my_t, clip_denoised=False, model_kwargs={'y': y})
             fac = diffusion.sqrt_one_minus_alphas_cumprod[cur_t]
             x_in = out['pred_xstart'] * fac + x * (1 - fac)
-
-            dists = discriminator(x_in.add(1).div(2), n)
-
-            losses = torch.cat(dists).mean()
+            x_in_grad = torch.zeros_like(x_in)
+            for i in range(cutn_batches):
+                clip_in = normalize(make_cutouts(x_in.add(1).div(2)))
+                image_embeds = clip_model.encode_image(clip_in).float()
+                dists = spherical_dist_loss(image_embeds.unsqueeze(1), target_embeds.unsqueeze(0))
+                dists = dists.view([cutn, n, -1])
+                losses = dists.mul(weights).sum(2).mean(0)
+                loss_values.append(losses.sum().item())  # log loss, probably shouldn't do per cutn_batch
+                x_in_grad += torch.autograd.grad(losses.sum() * clip_guidance_scale, x_in)[0] / cutn_batches
             tv_losses = tv_loss(x_in)
-            loss = losses.sum() * clip_guidance_scale + tv_losses.sum() * tv_scale
-            return -torch.autograd.grad(loss, x)[0]
+            range_losses = range_loss(out['pred_xstart'])
+            sat_losses = torch.abs(x_in - x_in.clamp(min=-1, max=1)).mean()
+            loss = tv_losses.sum() * tv_scale + range_losses.sum() * range_scale + sat_losses.sum() * sat_scale
+            if init is not None and init_scale:
+                init_losses = lpips_model(x_in, init)
+                loss = loss + init_losses.sum() * init_scale
+            x_in_grad += torch.autograd.grad(loss, x_in)[0]
+            grad = -torch.autograd.grad(x_in, x, x_in_grad)[0]
+        if clamp_grad:
+            magnitude = grad.square().mean().sqrt()
+            return grad * magnitude.clamp(max=0.05) / magnitude
+        return grad
 
     if model_config['timestep_respacing'].startswith('ddim'):
         sample_fn = diffusion.ddim_sample_loop_progressive
@@ -145,36 +383,54 @@ def generate(prompts: List[Tuple[str, float]],
     for i in range(n_batches):
         cur_t = diffusion.num_timesteps - skip_timesteps - 1
 
-        samples = sample_fn(
-            model,
-            (batch_size, 3, model_config['image_size'], model_config['image_size']),
-            clip_denoised=False,
-            model_kwargs={},
-            cond_fn=cond_fn,
-            progress=True,
-            skip_timesteps=skip_timesteps,
-            init_image=init,
-            randomize_class=True,
-        )
-        video = imageio.get_writer(f'{out_dir}/out.mp4', mode='I', fps=5, codec='libx264', bitrate='16M')
-        for j, sample in progressbar(enumerate(samples)):
-            cur_t -= 1
+        if model_config['timestep_respacing'].startswith('ddim'):
+            samples = sample_fn(
+                model,
+                (batch_size, 3, side_y, side_x),
+                clip_denoised=clip_denoised,
+                model_kwargs={},
+                cond_fn=cond_fn,
+                progress=True,
+                skip_timesteps=skip_timesteps,
+                init_image=init,
+                randomize_class=randomize_class,
+                eta=eta,
+            )
+        else:
+            samples = sample_fn(
+                model,
+                (batch_size, 3, side_y, side_x),
+                clip_denoised=clip_denoised,
+                model_kwargs={},
+                cond_fn=cond_fn,
+                progress=True,
+                skip_timesteps=skip_timesteps,
+                init_image=init,
+                randomize_class=randomize_class,
+            )
 
-            for k, image in enumerate(sample['pred_xstart']):
-                image = TF.to_pil_image(image.add(1).div(2).clamp(0, 1))
-                if j % 25 == 0 or cur_t == -1:
-                    video.append_data(np.array(image))
-                if j % 100 == 0 or cur_t == -1:
-                    image.save(f'./{str(out_dir)}/progress_latest.png')
-                yield j + skip_timesteps
-        video.close()
-        del model
-        torch.cuda.empty_cache()
-        gc.collect()
+        for j, sample in enumerate(samples):
+            cur_t -= 1
+            if j % display_rate == 0 or cur_t == -1:
+                for k, image in enumerate(sample['pred_xstart']):
+                    tqdm.write(f'Batch {i}, step {j}, output {k}:')
+                    current_time = datetime.now().strftime('%y%m%d-%H%M%S_%f')
+                    #filename = f'progress_batch{i:05}_iteration{j:05}_output{k:05}_{current_time}.png'
+                    image = TF.to_pil_image(image.add(1).div(2).clamp(0, 1))
+                    image.save(str(outdir) + '/progress_latest.png')
+                    yield j
 
 
 class Dreamer:
-    def __init__(self, prompts, clip_model, *, outdir: str, init_image: Optional[str], ddim_respacing, seed, steps, skip_timesteps):
+    def __init__(self,
+                 prompts,
+                 clip_model, *,
+                 outdir: str,
+                 init_image: Optional[str],
+                 ddim_respacing,
+                 seed,
+                 steps,
+                 skip_timesteps):
         self.prompts = prompts
         self.clip = clip_model
         self.outdir = Path(outdir)
@@ -187,11 +443,7 @@ class Dreamer:
         self.outdir.mkdir(parents=True, exist_ok=True)
 
     def epoch(self):
-        return generate(self.prompts, self.clip, self.outdir,
-                        init_image_url=self.init_image,
-                        ddim_respacing=self.ddim_respacing,
-                        seed=self.seed,
-                        steps=self.steps, skip_timesteps=self.skip_timesteps)
+        return do_run([x[0] for x in self.prompts], self.clip, self.outdir, self.seed, self.steps)
 
     def get_generated_image_path(self) -> Path:
         return self.outdir / 'progress_latest.png'
@@ -202,4 +454,3 @@ class Dreamer:
     @property
     def prompt(self):
         return self.prompts[0][0]
-
