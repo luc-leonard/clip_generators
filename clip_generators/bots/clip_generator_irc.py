@@ -10,7 +10,7 @@ import irc.bot
 
 from clip_generators.bots.miner import Miner
 from clip_generators.bots.generator import Generator
-from clip_generators.models.guided_diffusion_hd.clip_guided import Dreamer as Diffusion_trainer
+from clip_generators.models.guided_diffusion_hd.clip_guided_old import Dreamer as Diffusion_trainer
 from clip_generators.models.taming_transformers.clip_generator.generator import load_vqgan_model
 from clip_generators.models.taming_transformers.clip_generator.dreamer import Dreamer
 from clip_generators.utils import GenerationArgs, parse_prompt_args

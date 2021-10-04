@@ -1,7 +1,7 @@
 import sys
 
 
-from clip_generators.models.guided_diffusion_hd.clip_guided import Dreamer as Diffusion_trainer
+from clip_generators.models.guided_diffusion_hd.clip_guided_old import Dreamer as Diffusion_trainer
 from clip_generators.models.taming_transformers.clip_generator.dreamer import Dreamer
 import clip
 
@@ -20,7 +20,7 @@ def generate(prompt):
 
 def generate_diffusion(prompt):
     clip_model = clip.load('ViT-B/16', jit=False)[0].eval().requires_grad_(False).to('cuda:0')
-    trainer = Diffusion_trainer(prompt, clip_model, outdir=f'./out/{prompt}/')
+    trainer = Diffusion_trainer([(prompt, 1.0)], clip_model, outdir=f'./out/{prompt}/', init_image=None, ddim_respacing=False, seed=None, steps=1000, skip_timesteps=0)
     for it in trainer.epoch():
         ...
 

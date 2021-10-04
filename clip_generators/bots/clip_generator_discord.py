@@ -25,6 +25,7 @@ from clip_generators.bots.miner import Miner
 from clip_generators.utils import GenerationArgs, parse_prompt_args
 from clip_generators.utils import make_arguments_parser
 from clip_generators.models.upscaler.upscaler import upscale
+from clip_generators.models.taming_transformers.clip_generator.generator import fetch
 
 
 class DreamerClient(discord.Client):
@@ -54,6 +55,7 @@ class DreamerClient(discord.Client):
            # '!leave': self.leave_command,
             '!help': self.help_command,
             '!mine': self.mine_command,
+            '!upscale': self.upscale_command,
             '!restart': self.restart_command
         }
 
@@ -68,12 +70,28 @@ class DreamerClient(discord.Client):
         if args[0] in self.commands:
             self.commands[args[0]](message)
 
+
+    def upscale_command(self, message):
+        remote_url = message.content[len('!upscale') + 1:]
+        with fetch(remote_url) as remote_file:
+            with open('/tmp/temp', 'wb') as local_file:
+                local_file.write(remote_file.read())
+                upscale('/tmp/temp', '/tmp/temp_hd.png')
+                hd_image = PIL.Image.open('/tmp/temp_hd.png')
+                hd_image.thumbnail((1024, 1024))
+                stream = io.BytesIO()
+
+                hd_image.save(stream, format='PNG')
+                stream.seek(0)
+                self.loop.create_task(message.reply(f'', files=[discord.File(stream, filename='upsampled.png')]))
+
+
     def restart_command(self, message):
         self.miner.stop()
         os.execv(sys.argv[0], sys.argv)
 
     def mine_command(self, message):
-        prompt = message.content[len("!mine"):]
+        prompt = message.content[len("!mine") + 1:]
         if prompt == 'enabled':
             self.miner.start()
         elif prompt == 'disabled':
@@ -136,8 +154,7 @@ class DreamerClient(discord.Client):
         now = datetime.datetime.now()
         try:
             for it in dreamer.epoch():
-                if it % 100 == 0 or it < 0:
-                    await self.send_progress(dreamer, channel, it)
+                await self.send_progress(dreamer, channel, it)
                 await asyncio.sleep(0)
                 if self.stop_flag:
                     break

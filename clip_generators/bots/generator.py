@@ -2,7 +2,8 @@ import datetime
 
 from clip_generators.models.taming_transformers.clip_generator.generator import load_vqgan_model
 from clip_generators.utils import GenerationArgs
-from clip_generators.models.guided_diffusion_hd.clip_guided import Dreamer as Diffusion_dreamer
+from clip_generators.models.guided_diffusion_hd.clip_guided_old import Dreamer as Diffusion_dreamer
+from clip_generators.models.guided_diffusion_hd.clip_guided import Dreamer2 as Diffusion_dreamer2
 from clip_generators.models.taming_transformers.clip_generator.dreamer import Dreamer
 
 class Generator:
@@ -18,7 +19,7 @@ class Generator:
     def make_dreamer_diffusion(self, arguments: GenerationArgs):
         now = datetime.datetime.now()
 
-        trainer = Diffusion_dreamer(arguments.prompts,
+        trainer = Diffusion_dreamer2(arguments.prompts,
                                     self.clip,
                                     init_image=arguments.resume_from,
                                     ddim_respacing=arguments.model_arguments.dddim_respacing,

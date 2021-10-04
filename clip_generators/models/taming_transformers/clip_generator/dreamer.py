@@ -61,7 +61,7 @@ class Dreamer:
                  crazy_mode=False,
                  nb_augments=3,
                  full_image_loss=True,
-                 save_every=50,
+                 save_every=10,
                  init_image=None,
                  init_noise_factor=0.):
 
@@ -107,6 +107,7 @@ class Dreamer:
         print(f'i: {i}, loss: {sum(losses).item():g}, losses: {losses_str}')
         pil_image = TF.to_pil_image(generated_image[0].cpu())
         pil_image.save(str(self.outdir / f'progress_latest.png'))
+        return pil_image
 
     def start(self):
         for _ in self.epoch():
@@ -124,8 +125,8 @@ class Dreamer:
             if self.z_space.base_image is not None and self.clip_discriminator.full_image_loss:
                 losses.append(loss(generated_image, self.z_space.base_image_decoded) * 0.5)
             if i % self.save_every == 0:
-                self.save_image(i, generated_image, losses)
-            self.video.append_data(np.array(TF.to_pil_image(generated_image[0].cpu())))
+                image = self.save_image(i, generated_image, losses)
+                self.video.append_data(np.array(image))
             yield i
 
             sum(losses).backward()
