@@ -27,12 +27,12 @@ networks = network_list()
 
 class GuidedDiffusionGeneratorArgs(BaseModel):
     skips: int = 0
-    dddim_respacing: bool = False
+    ddim_respacing: bool = True
 
 
 class VQGANGenerationArgs(BaseModel):
     network: str = 'imagenet'
-    nb_augment: int = 3
+
     full_image_loss: bool = True
     crazy_mode: bool = False
     learning_rate: float = 0.05
@@ -55,10 +55,11 @@ class GenerationArgs(BaseModel):
     seed: int
     resume_from: Optional[str] = None
     cut: int = 64
+    nb_augment: int = 2
     model_arguments: Any
 
 
-def make_arguments_parser() -> argparse.ArgumentParser:
+def make_arguments_parser(**kwargs) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument('--crazy-mode', type=bool, default=False)
     parser.add_argument('--learning-rate', type=float, default=0.05)
@@ -66,8 +67,8 @@ def make_arguments_parser() -> argparse.ArgumentParser:
     parser.add_argument('--refresh-every', type=int, default=10)
     parser.add_argument('--resume-from', type=str, default=None)
     parser.add_argument('--prompt', action='append', required=True)
-    parser.add_argument('--cut', type=int, default=64)
-    parser.add_argument('--transforms', type=int, default=1)
+    parser.add_argument('--cut', type=int, default=40)
+    parser.add_argument('--transforms', type=int, default=2)
     parser.add_argument('--full-image-loss', type=bool, default=True)
     parser.add_argument('--network', type=str, default='imagenet')
     parser.add_argument('--network-type', type=str, default='diffusion')
@@ -78,11 +79,12 @@ def make_arguments_parser() -> argparse.ArgumentParser:
     parser.add_argument('--init-noise-factor', type=float, default=0.0)
 
     parser.set_defaults(ddim_respacing=False, add_noise_to_init=False)
+    parser.set_defaults(**kwargs)
     return parser
 
 
 def make_model_arguments(parsed_args):
-    if parsed_args.network_type == 'legacy':
+    if parsed_args.network_type == 'vqgan':
         return VQGANGenerationArgs(network=parsed_args.network,
                             nb_augments=parsed_args.transforms,
                             full_image_loss=parsed_args.full_image_loss,
@@ -96,7 +98,7 @@ def parse_prompt_args(prompt: str = '') -> GenerationArgs:
     parser = make_arguments_parser()
     try:
         parsed_args = parser.parse_args(shlex.split(prompt))
-        print(parsed_args)
+        print('arguments', parsed_args)
         args = GenerationArgs(prompt=parsed_args.prompt,
                               refresh_every=parsed_args.refresh_every,
                               resume_from=parsed_args.resume_from,
@@ -114,6 +116,7 @@ def parse_prompt_args(prompt: str = '') -> GenerationArgs:
                 args.prompts.append((the_prompt[:separator_index], float(the_prompt[separator_index + 1:])))
             else:
                 args.prompts.append((the_prompt, 1.0))
+        print('parsed arguments', args)
         return args
     except SystemExit:
         raise Exception(parser.usage())

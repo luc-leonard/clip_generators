@@ -37,9 +37,9 @@ class DreamerClient(discord.Client):
         self.stop_flag = False
         self.commands = self.make_commands()
 
-        self.arguments = None
         self.generating = False
         self.generating_thread = None
+        self.defaults = {}
 
         self.miner_enabled = True
         self.miner = Miner('/home/lleonard/t-rex/launch.sh')
@@ -50,7 +50,8 @@ class DreamerClient(discord.Client):
     def make_commands(self) -> Dict[str, Callable[[discord.Message], None]]:
         return {
             '!generate': self.generate_command,
-            '!generate_legacy': self.generate_command,
+            '!g': self.generate_command,
+            '!set': self.set_command,
             '!stop': self.stop_command,
            # '!leave': self.leave_command,
             '!help': self.help_command,
@@ -70,6 +71,9 @@ class DreamerClient(discord.Client):
         if args[0] in self.commands:
             self.commands[args[0]](message)
 
+
+    def set_command(self, message):
+        ...
 
     def upscale_command(self, message):
         remote_url = message.content[len('!upscale') + 1:]
@@ -116,7 +120,7 @@ class DreamerClient(discord.Client):
 
         self.miner.stop()
 
-        prompt = message.content[len("!generate"):]
+        prompt = message.content[message.content.index(' ') + 1:]
         if '--prompt' in prompt:
             try:
                 arguments = parse_prompt_args(prompt)
@@ -136,7 +140,7 @@ class DreamerClient(discord.Client):
         self.stop_flag = False
         self.generating = True
 
-        self.loop.create_task(self.generate(dreamer, message))
+        self.loop.create_task(self.generate(dreamer, message, arguments))
 
 
     async def send_progress(self, dreamer, channel, iteration):
@@ -144,17 +148,19 @@ class DreamerClient(discord.Client):
             await channel.send(dreamer.prompt)
         await channel.send(f'step {iteration} / {dreamer.steps}', file=discord.File(dreamer.get_generated_image_path()))
 
-    async def generate(self, dreamer, message: discord.Message):
+    async def generate(self, dreamer, message: discord.Message, arguments):
         if message.guild is not None:
-            channel = await message.create_thread(name=dreamer.prompt, )
+            message_to_start_thread = await message.channel.send(dreamer.prompt)
+            channel = await message_to_start_thread.create_thread(name=dreamer.prompt, )
         else:
             channel = message.channel
-        self.loop.create_task(channel.send('arguments = ' + str(self.arguments)))
+        self.loop.create_task(channel.send('arguments = ' + str(arguments)))
         await channel.send('generating...')
         now = datetime.datetime.now()
         try:
             for it in dreamer.epoch():
-                await self.send_progress(dreamer, channel, it)
+                if it is not None:
+                    await self.send_progress(dreamer, channel, it)
                 await asyncio.sleep(0)
                 if self.stop_flag:
                     break
@@ -166,6 +172,10 @@ class DreamerClient(discord.Client):
             lr_path = f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{dreamer.prompt.replace("//", "_")}.png'
             hd_path = f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{dreamer.prompt.replace("//", "_")}_hd.png'
             shutil.copy(dreamer.get_generated_image_path(), lr_path)
+
+            del dreamer
+            torch.cuda.empty_cache()
+            gc.collect()
 
             upscale(lr_path, hd_path)
             hd_image = PIL.Image.open(hd_path)

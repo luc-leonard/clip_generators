@@ -34,31 +34,26 @@ device = 'cuda:0'
 # 350/50/50/32 and 500/0/0/64 have worked well for 25 timesteps on 256px
 # Also, sometimes 1 cutn actually works out fine
 
-clip_guidance_scale = 1000 # 1000 - Controls how much the image should look like the prompt.
-tv_scale = 150 # 150 - Controls the smoothness of the final output.
-range_scale = 150 # 150 - Controls how far out of range RGB values are allowed to be.
-sat_scale = 0 # 0 - Controls how much saturation is allowed. From nshepperd's JAX notebook.
-#cutn = 50 # 16 - Controls how many crops to take from the image.
-#cutn_batches = 2 # 2 - Accumulate CLIP gradient from multiple batches of cuts [Can help with OOM errors / Low VRAM]
+prompts = ['princess in sanctuary, trending on artstation, photorealistic portrait of a young princess']
+image_prompts = []
+batch_size = 1
+clip_guidance_scale = 5000  # Controls how much the image should look like the prompt. Use high value when clamping activated
+tv_scale = 8000              # Controls the smoothness of the final output.
+range_scale = 150            # Controls how far out of range RGB values are allowed to be.
+clamp_max=0.5              # Controls how far gradient can go - try play with it, dramatic effect when clip guidance scale is high enough
 
-init_scale = 0 # 0 - This enhances the effect of the init image, a good value is 1000
-#skip_timesteps = 0 # 0 - Controls the starting point along the diffusion timesteps
-perlin_init = False # False - Option to start with random perlin noise
-perlin_mode = 'mixed' # 'mixed' ('gray', 'color')
-
-skip_augs = False # False - Controls whether to skip torchvision augmentations
-randomize_class = True # True - Controls whether the imagenet class is randomly changed each iteration
-clip_denoised = False # False - Determines whether CLIP discriminates a noisy or denoised image
-clamp_grad = True # True - Experimental: Using adaptive clip grad in the cond_fn
-
-fuzzy_prompt = False # False - Controls whether to add multiple noisy prompts to the prompt losses
-rand_mag = 0.05 # 0.1 - Controls the magnitude of the random noise
-eta = 0.5 # 0.0 - DDIM hyperparameter
-
-
-display_rate = 50
-n_batches = 1 # 1 - Controls how many consecutive batches of images are generated
-batch_size = 1 # 1 - Controls how many images are generated in parallel in a batch
+RGB_min, RGB_max = [-0.9,0.9]     # Play with it to get different styles
+cutn = 32
+cutn_batches = 4           # Turn this up for better result but slower speed
+cutn_whole_portion = 0.2       #The rotation augmentation, captures whole structure
+rotation_fill=[1,1,1]
+cutn_bw_portion = 0.2         #Greyscale augmentation, focus on structure rather than color info to give better structure
+cut_pow = 0.5
+n_batches = 1
+#init_image = None   # This can be an URL or Colab local path and must be in quotes.
+skip_timesteps = 12  # Skip unstable steps                  # Higher values make the output look more like the init.
+init_scale = 1000      # This enhances the effect of the init image, a good value is 1000.
+clip_denoised = False
 
 normalize = T.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
 
@@ -165,45 +160,41 @@ def resample(input, size, align_corners=True):
     return F.interpolate(input, size, mode='bicubic', align_corners=align_corners)
 
 class MakeCutouts(nn.Module):
-    def __init__(self, cut_size, cutn, skip_augs=False):
+    def __init__(self, cut_size, cutn, cut_pow=1., cutn_whole_portion = 0.0, cutn_bw_portion = 0.2):
         super().__init__()
         self.cut_size = cut_size
         self.cutn = cutn
-        self.skip_augs = skip_augs
-        self.augs = T.Compose([
-            T.RandomHorizontalFlip(p=0.5),
-            T.Lambda(lambda x: x + torch.randn_like(x) * 0.01),
-            T.RandomAffine(degrees=15, translate=(0.1, 0.1)),
-            T.Lambda(lambda x: x + torch.randn_like(x) * 0.01),
-            T.RandomPerspective(distortion_scale=0.4, p=0.7),
-            T.Lambda(lambda x: x + torch.randn_like(x) * 0.01),
-            T.RandomGrayscale(p=0.15),
-            T.Lambda(lambda x: x + torch.randn_like(x) * 0.01),
-            # T.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
-        ])
+        self.cut_pow = cut_pow
+        self.cutn_whole_portion = cutn_whole_portion
+        self.cutn_bw_portion = cutn_bw_portion
 
     def forward(self, input):
-        input = T.Pad(input.shape[2]//4, fill=0)(input)
         sideY, sideX = input.shape[2:4]
         max_size = min(sideX, sideY)
-
+        min_size = min(sideX, sideY, self.cut_size)
         cutouts = []
-        for ch in range(self.cutn):
-            if ch > self.cutn - self.cutn//4:
-                cutout = input.clone()
-            else:
-                size = int(max_size * torch.zeros(1,).normal_(mean=.8, std=.3).clip(float(self.cut_size/max_size), 1.))
-                offsetx = torch.randint(0, abs(sideX - size + 1), ())
-                offsety = torch.randint(0, abs(sideY - size + 1), ())
+        if self.cutn==1:
+            cutouts.append(F.adaptive_avg_pool2d(input, self.cut_size))
+            return torch.cat(cutouts)
+        cut_1 = round(self.cutn*(1-self.cutn_bw_portion))
+        cut_2 = self.cutn-cut_1
+        gray = transforms.Grayscale(3)
+        if cut_1 >0:
+            for i in range(cut_1):
+                size = int(torch.rand([])**self.cut_pow * (max_size - min_size) + min_size)
+                offsetx = torch.randint(0, sideX - size + 1, ())
+                offsety = torch.randint(0, sideY - size + 1, ())
                 cutout = input[:, :, offsety:offsety + size, offsetx:offsetx + size]
-
-            if not self.skip_augs:
-                cutout = self.augs(cutout)
-            cutouts.append(resample(cutout, (self.cut_size, self.cut_size)))
-            del cutout
-
-        cutouts = torch.cat(cutouts, dim=0)
-        return cutouts
+                if i < int(self.cutn_bw_portion * cut_1):
+                    cutout = gray(cutout)
+                cutouts.append(F.adaptive_avg_pool2d(cutout, self.cut_size))
+        if cut_2 >0:
+            for i in range(cut_2):
+                cutout = TF.rotate(input, angle=random.uniform(-10.0, 10.0), expand=True, fill=rotation_fill)
+                if i < int(self.cutn_bw_portion * cut_2):
+                    cutout =gray(cutout)
+                cutouts.append(F.adaptive_avg_pool2d(cutout, self.cut_size))
+        return torch.cat(cutouts)
 
 
 def spherical_dist_loss(x, y):
@@ -247,13 +238,13 @@ def make_model(the_model_config):
     return model, diffusion
 
 
-def do_run(prompts, clip_model, outdir, seed,
-           skip_timesteps, steps,  ddim_respacing,
-           init_image, cutn, cutn_batches):
-    if ddim_respacing:
-        timestep_respacing = 'ddim' + str(steps)  # Modify this value to decrease the number of timesteps.
-    else:
-        timestep_respacing = str(steps)
+model_list = [
+   #'RN50x16',
+   "ViT-B/16",
+  # "ViT-B/32"
+]
+
+def do_run(prompts, clip_model, outdir, seed, init_image):
     diffusion_steps = 1000
 
     model_config = model_and_diffusion_defaults()
@@ -262,7 +253,7 @@ def do_run(prompts, clip_model, outdir, seed,
         'class_cond': False,
         'diffusion_steps': diffusion_steps,
         'rescale_timesteps': True,
-        'timestep_respacing': timestep_respacing,
+        'timestep_respacing': 'ddim500',
         'image_size': 512,
         'learn_sigma': True,
         'noise_schedule': 'linear',
@@ -273,54 +264,46 @@ def do_run(prompts, clip_model, outdir, seed,
         'use_fp16': True,
         'use_scale_shift_norm': True,
     })
-    print(model_config)
+
     side_x = side_y = model_config['image_size']
 
     model, diffusion = make_model(model_config)
 
-    clip_size = clip_model.visual.input_resolution
+    clip_size = {}
+    for i in model_list:
+        clip_size[i] = clip_model[i].visual.input_resolution
     lpips_model = lpips.LPIPS(net='vgg').to(device)
 
-
-    loss_values = []
-
     if seed is not None:
-        np.random.seed(seed)
-        random.seed(seed)
         torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
+    make_cutouts = {}
+    for i in model_list:
+        make_cutouts[i] = MakeCutouts(clip_size[i], cutn // len(model_list), cut_pow, cutn_whole_portion,
+                                      cutn_bw_portion)
 
-    make_cutouts = MakeCutouts(clip_size, cutn, skip_augs=skip_augs)
-    target_embeds, weights = [], []
+    side_x = side_y = model_config['image_size']
+
+    target_embeds, weights = {}, []
+    for i in model_list:
+        target_embeds[i] = []
 
     for prompt in prompts:
         txt, weight = parse_prompt(prompt)
-        txt = clip_model.encode_text(clip.tokenize(prompt).to(device)).float()
+        for i in model_list:
+            target_embeds[i].append(clip_model[i].encode_text(clip.tokenize(txt).to(device)).float())
+        weights.append(weight)
 
-        if fuzzy_prompt:
-            for i in range(25):
-                target_embeds.append((txt + torch.randn(txt.shape).cuda() * rand_mag).clamp(0, 1))
-                weights.append(weight)
-        else:
-            target_embeds.append(txt)
-            weights.append(weight)
-
-    for prompt in []:
+    for prompt in image_prompts:
         path, weight = parse_prompt(prompt)
         img = Image.open(fetch(path)).convert('RGB')
-        img = TF.resize(img, min(side_x, side_y, *img.size), T.InterpolationMode.LANCZOS)
-        batch = make_cutouts(TF.to_tensor(img).to(device).unsqueeze(0).mul(2).sub(1))
-        embed = clip_model.encode_image(normalize(batch)).float()
-        if fuzzy_prompt:
-            for i in range(25):
-                target_embeds.append((embed + torch.randn(embed.shape).cuda() * rand_mag).clamp(0, 1))
-                weights.extend([weight / cutn] * cutn)
-        else:
-            target_embeds.append(embed)
-            weights.extend([weight / cutn] * cutn)
-
-    target_embeds = torch.cat(target_embeds)
+        img = TF.resize(img, min(side_x, side_y, *img.size), transforms.InterpolationMode.LANCZOS)
+        for i in model_list:
+            batch = make_cutouts[i](TF.to_tensor(img).unsqueeze(0).to(device))
+            embed = clip_model[i].encode_image(normalize(batch)).float()
+            target_embeds[i].append(embed)
+        weights.extend([weight / cutn * len(model_list)] * (cutn // len(model_list)))
+    for i in model_list:
+        target_embeds[i] = torch.cat(target_embeds[i])
     weights = torch.tensor(weights, device=device)
     if weights.sum().abs() < 1e-3:
         raise RuntimeError('The weights must not sum to 0.')
@@ -330,103 +313,80 @@ def do_run(prompts, clip_model, outdir, seed,
     if init_image is not None:
         init = Image.open(fetch(init_image)).convert('RGB')
         init = init.resize((side_x, side_y), Image.LANCZOS)
-        init.show()
         init = TF.to_tensor(init).to(device).unsqueeze(0).mul(2).sub(1)
-
-    if init_image is None and perlin_init:
-        if perlin_mode == 'color':
-            init = create_perlin_noise([1.5 ** -i * 0.5 for i in range(12)], 1, 1, False, side_x, side_y)
-            init2 = create_perlin_noise([1.5 ** -i * 0.5 for i in range(8)], 4, 4, False, side_x, side_y)
-        elif perlin_mode == 'gray':
-            init = create_perlin_noise([1.5 ** -i * 0.5 for i in range(12)], 1, 1, True, side_x, side_y)
-            init2 = create_perlin_noise([1.5 ** -i * 0.5 for i in range(8)], 4, 4, True, side_x, side_y)
-        else:
-            init = create_perlin_noise([1.5 ** -i * 0.5 for i in range(12)], 1, 1, False, side_x, side_y)
-            init2 = create_perlin_noise([1.5 ** -i * 0.5 for i in range(8)], 4, 4, True, side_x, side_y)
-
-        # init = TF.to_tensor(init).add(TF.to_tensor(init2)).div(2).to(device)
-        init = TF.to_tensor(init).add(TF.to_tensor(init2)).div(2).to(device).unsqueeze(0).mul(2).sub(1)
-        del init2
 
     cur_t = None
 
-    def cond_fn(x, t, y=None):
-        with torch.enable_grad():
-            x = x.detach().requires_grad_()
-            n = x.shape[0]
-            my_t = torch.ones([n], device=device, dtype=torch.long) * cur_t
-            out = diffusion.p_mean_variance(model, x, my_t, clip_denoised=False, model_kwargs={'y': y})
-            fac = diffusion.sqrt_one_minus_alphas_cumprod[cur_t]
-            x_in = out['pred_xstart'] * fac + x * (1 - fac)
-            x_in_grad = torch.zeros_like(x_in)
-            for i in range(cutn_batches):
-                clip_in = normalize(make_cutouts(x_in.add(1).div(2)))
-                image_embeds = clip_model.encode_image(clip_in).float()
-                dists = spherical_dist_loss(image_embeds.unsqueeze(1), target_embeds.unsqueeze(0))
-                dists = dists.view([cutn, n, -1])
+    def cond_fn(x, t, out, y=None):
+        clip_guidance_scale_2 = clip_guidance_scale
+
+        n = x.shape[0]
+        cur_output = out['pred_xstart'].detach()
+        fac = diffusion.sqrt_one_minus_alphas_cumprod[cur_t]
+        x_in = out['pred_xstart'] * fac + x * (1 - fac)
+
+        my_t = torch.ones([n], device=device, dtype=torch.long) * cur_t
+        loss = 0
+        x_in_grad = torch.zeros_like(x_in)
+        for k in range(cutn_batches):
+            losses = 0
+            for i in model_list:
+                if i == "":
+                    clip_in = normalize(make_cutouts[i](x_in.mean(dim=1).expand(3, -1, -1).unsqueeze(0).add(1).div(2)))
+                else:
+                    clip_in = normalize(make_cutouts[i](x_in.add(1).div(2)))
+                image_embeds = clip_model[i].encode_image(clip_in).float()
+                image_embeds = image_embeds.unsqueeze(1)
+                dists = spherical_dist_loss(image_embeds, target_embeds[i].unsqueeze(0))
+                del image_embeds, clip_in
+                dists = dists.view([cutn // len(model_list), n, -1])
                 losses = dists.mul(weights).sum(2).mean(0)
-                loss_values.append(losses.sum().item())  # log loss, probably shouldn't do per cutn_batch
-                x_in_grad += torch.autograd.grad(losses.sum() * clip_guidance_scale, x_in)[0] / cutn_batches
-            tv_losses = tv_loss(x_in)
-            range_losses = range_loss(out['pred_xstart'])
-            sat_losses = torch.abs(x_in - x_in.clamp(min=-1, max=1)).mean()
-            loss = tv_losses.sum() * tv_scale + range_losses.sum() * range_scale + sat_losses.sum() * sat_scale
-            if init is not None and init_scale:
-                init_losses = lpips_model(x_in, init)
-                loss = loss + init_losses.sum() * init_scale
-            x_in_grad += torch.autograd.grad(loss, x_in)[0]
-            grad = -torch.autograd.grad(x_in, x, x_in_grad)[0]
-        if clamp_grad:
-            magnitude = grad.square().mean().sqrt()
-            return grad * magnitude.clamp(max=0.05) / magnitude
-        return grad
+                x_in_grad += torch.autograd.grad(losses.sum() * clip_guidance_scale_2, x_in)[0] / cutn_batches / len(
+                    model_list)
+                del dists, losses
+            gc.collect()
+        tv_losses = tv_loss(x_in)
+        range_losses = range_loss(out['pred_xstart'])
+        loss = tv_losses.sum() * tv_scale + range_losses.sum() * range_scale
+        if init is not None and init_scale:
+            init_losses = lpips_model(x_in, init)
+            loss = loss + init_losses.sum() * init_scale
+        x_in_grad += torch.autograd.grad(loss, x_in, )[0]
+        grad = -torch.autograd.grad(x_in, x, x_in_grad)[0]
+        magnitude = grad.square().mean().sqrt()
+        return grad * magnitude.clamp(max=clamp_max) / magnitude
 
     if model_config['timestep_respacing'].startswith('ddim'):
         sample_fn = diffusion.ddim_sample_loop_progressive
     else:
         sample_fn = diffusion.p_sample_loop_progressive
-
     video = imageio.get_writer(f'{outdir}/out.mp4', mode='I', fps=25, codec='libx264', bitrate='16M')
+
     for i in range(n_batches):
+
         cur_t = diffusion.num_timesteps - skip_timesteps - 1
 
-        if model_config['timestep_respacing'].startswith('ddim'):
-            samples = sample_fn(
-                model,
-                (batch_size, 3, side_y, side_x),
-                clip_denoised=clip_denoised,
-                model_kwargs={},
-                cond_fn=cond_fn,
-                progress=True,
-                skip_timesteps=skip_timesteps,
-                init_image=init,
-                randomize_class=randomize_class,
-                eta=eta,
-            )
-        else:
-            samples = sample_fn(
-                model,
-                (batch_size, 3, side_y, side_x),
-                clip_denoised=clip_denoised,
-                model_kwargs={},
-                cond_fn=cond_fn,
-                progress=True,
-                skip_timesteps=skip_timesteps,
-                init_image=init,
-                randomize_class=randomize_class,
-            )
+        samples = sample_fn(
+            model,
+            (batch_size, 3, model_config['image_size'], model_config['image_size']),
+            clip_denoised=clip_denoised,
+            model_kwargs={},
+            cond_fn=cond_fn,
+            progress=True,
+            skip_timesteps=skip_timesteps,
+            init_image=init,
+            cond_fn_with_grad=True,
+        )
 
         for j, sample in enumerate(samples):
             cur_t -= 1
             for k, image in enumerate(sample['pred_xstart']):
+                image = TF.to_pil_image(image.add(1).div(2).clamp(0, 1))
+                video.append_data(np.array(image))
                 if j % 10 == 0 or cur_t == -1:
-                    image = TF.to_pil_image(image.add(1).div(2).clamp(0, 1))
-                    video.append_data(np.array(image))
-                if j % 50 == 0 or cur_t == -1:
                     tqdm.write(f'Batch {i}, step {j}, output {k}:')
                     image.save(str(outdir) + '/progress_latest.png')
-                    yield j + skip_timesteps
-                yield None
+                    yield j
 
 
 class Dreamer:
@@ -438,31 +398,20 @@ class Dreamer:
                  ddim_respacing,
                  seed,
                  steps,
-                 skip_timesteps,
-                 cut, cut_batch):
+                 skip_timesteps):
         self.prompts = prompts
         self.clip = clip_model
         self.outdir = Path(outdir)
         self.init_image = init_image
         self.ddim_respacing = ddim_respacing
         self.seed = seed
-        self.steps = steps
+        self.steps = 124 #yes it is hardcoded :)
         self.skip_timesteps = skip_timesteps
-        self.cut = cut
-        self.cut_batch = cut_batch
+
         self.outdir.mkdir(parents=True, exist_ok=True)
 
     def epoch(self):
-        return do_run([x[0] for x in self.prompts],
-                      self.clip,
-                      self.outdir,
-                      self.seed,
-                      self.skip_timesteps,
-                      self.steps,
-                      self.ddim_respacing,
-                      self.init_image,
-                      self.cut,
-                      self.cut_batch)
+        return do_run([x[0] for x in self.prompts], {"ViT-B/16": self.clip}, self.outdir, self.seed, self.init_image)
 
     def get_generated_image_path(self) -> Path:
         return self.outdir / 'progress_latest.png'

@@ -127,7 +127,9 @@ class Dreamer:
             if i % self.save_every == 0:
                 image = self.save_image(i, generated_image, losses)
                 self.video.append_data(np.array(image))
-            yield i
+            if i % 50 == 0:
+                yield i
+            yield None
 
             sum(losses).backward()
             self.optimizer.step()

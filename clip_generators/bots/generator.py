@@ -2,8 +2,9 @@ import datetime
 
 from clip_generators.models.taming_transformers.clip_generator.generator import load_vqgan_model
 from clip_generators.utils import GenerationArgs
-from clip_generators.models.guided_diffusion_hd.clip_guided_old import Dreamer as Diffusion_dreamer
-from clip_generators.models.guided_diffusion_hd.clip_guided import Dreamer2 as Diffusion_dreamer2
+from clip_generators.models.guided_diffusion_hd.clip_guided_old import Dreamer as Diffusion_dreamer_legacy
+from clip_generators.models.guided_diffusion_hd.clip_guided import Dreamer as Diffusion_dreamer
+from clip_generators.models.guided_diffusion_hd.clip_guided_new import Dreamer as Diffusion_dreamer_new
 from clip_generators.models.taming_transformers.clip_generator.dreamer import Dreamer
 
 class Generator:
@@ -13,20 +14,26 @@ class Generator:
         self.user = user
         if args.network_type == 'diffusion':
             self.dreamer = self.make_dreamer_diffusion(args)
-        else:
+        if args.network_type == 'diffusion_2':
+            self.dreamer = self.make_dreamer_diffusion_2(args)
+        elif args.network_type == 'vqgan':
             self.dreamer = self.make_dreamer_vqgan(args)
+        elif args.network_type == 'diffusion_old':
+            self.dreamer = self.make_dreamer_diffusion_old(args)
 
     def make_dreamer_diffusion(self, arguments: GenerationArgs):
         now = datetime.datetime.now()
 
-        trainer = Diffusion_dreamer2(arguments.prompts,
+        trainer = Diffusion_dreamer(arguments.prompts,
                                     self.clip,
                                     init_image=arguments.resume_from,
-                                    ddim_respacing=arguments.model_arguments.dddim_respacing,
+                                    ddim_respacing=arguments.model_arguments.ddim_respacing,
                                     seed=arguments.seed,
                                     steps=arguments.steps,
                                     outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}',
                                     skip_timesteps=arguments.model_arguments.skips,
+                                    cut=arguments.cut,
+                                    cut_batch=arguments.nb_augment
                                     )
         return trainer
 
@@ -49,3 +56,32 @@ class Generator:
                           init_noise_factor=arguments.model_arguments.init_noise_factor
                           )
         return trainer
+
+    def make_dreamer_diffusion_old(self, arguments):
+        now = datetime.datetime.now()
+
+        trainer = Diffusion_dreamer_legacy(arguments.prompts,
+                                    self.clip,
+                                    init_image=arguments.resume_from,
+                                    ddim_respacing=arguments.model_arguments.ddim_respacing,
+                                    seed=arguments.seed,
+                                    steps=arguments.steps,
+                                    outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}',
+                                    skip_timesteps=arguments.model_arguments.skips,
+                                    )
+        return trainer
+
+    def make_dreamer_diffusion_2(self, arguments):
+        now = datetime.datetime.now()
+
+        trainer = Diffusion_dreamer_new(arguments.prompts,
+                                    self.clip,
+                                    init_image=arguments.resume_from,
+                                    ddim_respacing=arguments.model_arguments.ddim_respacing,
+                                    seed=arguments.seed,
+                                    steps=arguments.steps,
+                                    outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}',
+                                    skip_timesteps=arguments.model_arguments.skips,
+                                    )
+        return trainer
+

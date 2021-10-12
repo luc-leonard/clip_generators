@@ -3,6 +3,7 @@ import datetime
 import shutil
 import threading
 import urllib.parse
+from pathlib import Path
 
 import clip
 import irc
@@ -10,10 +11,8 @@ import irc.bot
 
 from clip_generators.bots.miner import Miner
 from clip_generators.bots.generator import Generator
-from clip_generators.models.guided_diffusion_hd.clip_guided_old import Dreamer as Diffusion_trainer
-from clip_generators.models.taming_transformers.clip_generator.generator import load_vqgan_model
-from clip_generators.models.taming_transformers.clip_generator.dreamer import Dreamer
 from clip_generators.utils import GenerationArgs, parse_prompt_args
+from clip_generators.models.upscaler.upscaler import upscale
 
 
 class IrcBot(irc.bot.SingleServerIRCBot):
@@ -44,14 +43,21 @@ class IrcBot(irc.bot.SingleServerIRCBot):
         for it in trainer.epoch():
             if self.stop_generating is True:
                 break
-            if it % 100 == 0:
+            if it is not None:
                 c.privmsg(self.channel, f'generation {it}/{trainer.steps}')
         trainer.close()
+
+        lr_path = f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_generating_user.nick}_{trainer.prompt.replace("//", "_")}.png'
+        hd_path = f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_generating_user.nick}_{trainer.prompt.replace("//", "_")}_hd.png'
+        shutil.copy(trainer.get_generated_image_path(), lr_path)
+        c.privmsg(self.channel, "upscaling image...")
+        upscale(lr_path, hd_path)
+        c.privmsg(self.channel,
+                  f'{trainer.prompt} => http://home.luc-leonard.fr:8082/{urllib.parse.quote(str(Path(hd_path).relative_to("./discord_out_diffusion")))}')
         self.miner.start()
         self.generating = None
         c.privmsg(self.channel, f'Generation done. Ready to take an order')
-        shutil.copy(trainer.get_generated_image_path(),
-                    f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{trainer.prompts[0][0].replace("//", "_")}.png')
+
 
     def on_pubmsg(self, c, e):
         text = e.arguments[0]
@@ -63,16 +69,21 @@ class IrcBot(irc.bot.SingleServerIRCBot):
                 c.privmsg(e.target, f'currently generating {self.generating}, try again later.')
                 return
             prompt = ' '.join(args[1:])
-            try:
-                arguments = parse_prompt_args(prompt)
-            except Exception as ex:
-                c.privmsg(e.target, str(ex))
-                return
+            if '--prompt' in prompt:
+                try:
+                    arguments = parse_prompt_args(prompt)
+                except Exception as ex:
+                    print(ex)
+                    c.privmsg(e.target, str(ex))
+                    return
+            else:
+                arguments = parse_prompt_args('--prompt "osef;1"')
+                arguments.prompts = [(prompt, 1.0)]
             c.privmsg(e.target, f'generating {arguments.prompts[0]}')
-            trainer = Generator(arguments, self.clip, '__IRC__').dreamer
+            trainer = Generator(arguments, self.clip, e.source.nick).dreamer
             generated_image_path = trainer.get_generated_image_path()
             c.privmsg(e.target,
-                      f'{prompt} => http://home.luc-leonard.fr:8082/{urllib.parse.quote(str(generated_image_path.relative_to(".")))}')
+                      f'{prompt} => http://home.luc-leonard.fr:8082/{urllib.parse.quote(str(generated_image_path.relative_to("./discord_out_diffusion")))}')
 
 
             self.generating = prompt

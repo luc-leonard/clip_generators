@@ -78,6 +78,7 @@ def generate(prompts: List[Tuple[str, float]],
     cut_pow = 0.5
     n_batches = 1
 
+    print('OLD DIFFUSION')
     model_config = model_and_diffusion_defaults()
     model_config.update({
         'attention_resolutions': '32, 16, 8',
@@ -159,14 +160,14 @@ def generate(prompts: List[Tuple[str, float]],
         video = imageio.get_writer(f'{out_dir}/out.mp4', mode='I', fps=25, codec='libx264', bitrate='16M')
         for j, sample in progressbar(enumerate(samples)):
             cur_t -= 1
-
             for k, image in enumerate(sample['pred_xstart']):
                 image = TF.to_pil_image(image.add(1).div(2).clamp(0, 1))
-                if k+j % 10 == 0 or cur_t == -1:
+                if j % 100 == 0 or cur_t == -1:
                     video.append_data(np.array(image))
                 if j % 100 == 0 or cur_t == -1:
                     image.save(f'./{str(out_dir)}/progress_latest.png')
-                yield j + skip_timesteps
+                    yield j + skip_timesteps
+
         video.close()
         del model
         torch.cuda.empty_cache()
@@ -189,7 +190,7 @@ class Dreamer:
         self.init_image = init_image
         self.ddim_respacing = ddim_respacing
         self.seed = seed
-        self.steps = steps
+        self.steps = 1000
         self.skip_timesteps = skip_timesteps
 
         self.outdir.mkdir(parents=True, exist_ok=True)
