@@ -43,8 +43,8 @@ sat_scale = 0 # 0 - Controls how much saturation is allowed. From nshepperd's JA
 
 init_scale = 0 # 0 - This enhances the effect of the init image, a good value is 1000
 #skip_timesteps = 0 # 0 - Controls the starting point along the diffusion timesteps
-perlin_init = False # False - Option to start with random perlin noise
-perlin_mode = 'mixed' # 'mixed' ('gray', 'color')
+#perlin_init = False # False - Option to start with random perlin noise
+#perlin_mode = 'mixed' # 'mixed' ('gray', 'color')
 
 skip_augs = False # False - Controls whether to skip torchvision augmentations
 randomize_class = True # True - Controls whether the imagenet class is randomly changed each iteration
@@ -232,11 +232,13 @@ def make_model(the_model_config):
     current_path = os.path.dirname(os.path.realpath(__file__))
 
     checkpoint_path = Path(current_path) / '512x512_diffusion_uncond_finetune_008100.pt'
-    if not checkpoint_path.exists():
-        urllib.request.URLopener().retrieve(
-            'https://the-eye.eu/public/AI/models/512x512_diffusion_unconditional_ImageNet/512x512_diffusion_uncond_finetune_008100.pt',
-            str(checkpoint_path), reporthook=lambda block_id, bs, size: print(block_id, bs, size))
-    model.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
+    #checkpoint_path = Path(current_path) / '128x128_diffusion_pokemon.pt'
+    # if not checkpoint_path.exists():
+    #     urllib.request.URLopener().retrieve(
+    #         'https://the-eye.eu/public/AI/models/512x512_diffusion_unconditional_ImageNet/512x512_diffusion_uncond_finetune_008100.pt',
+    #         str(checkpoint_path), reporthook=lambda block_id, bs, size: print(block_id, bs, size))
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    model.load_state_dict(checkpoint)
     model.requires_grad_(False).eval().to(device)
     for name, param in model.named_parameters():
         if 'qkv' in name or 'norm' in name or 'proj' in name:
@@ -249,7 +251,7 @@ def make_model(the_model_config):
 
 def do_run(prompts, clip_model, outdir, seed,
            skip_timesteps, steps,  ddim_respacing,
-           init_image, cutn, cutn_batches):
+           init_image, cutn, cutn_batches, perlin_mode):
     if ddim_respacing:
         timestep_respacing = 'ddim' + str(steps)  # Modify this value to decrease the number of timesteps.
     else:
@@ -333,6 +335,7 @@ def do_run(prompts, clip_model, outdir, seed,
         init.show()
         init = TF.to_tensor(init).to(device).unsqueeze(0).mul(2).sub(1)
 
+    perlin_init = len(perlin_mode) > 0
     if init_image is None and perlin_init:
         if perlin_mode == 'color':
             init = create_perlin_noise([1.5 ** -i * 0.5 for i in range(12)], 1, 1, False, side_x, side_y)
@@ -416,33 +419,38 @@ def do_run(prompts, clip_model, outdir, seed,
                 randomize_class=randomize_class,
             )
 
+
         for j, sample in enumerate(samples):
             cur_t -= 1
             for k, image in enumerate(sample['pred_xstart']):
-                if j % 10 == 0 or cur_t == -1:
-                    image = TF.to_pil_image(image.add(1).div(2).clamp(0, 1))
-                    video.append_data(np.array(image))
-                if j % 50 == 0 or cur_t == -1:
+                the_image = None
+                if j % (steps / 100) == 0 or cur_t == -1:
+                    the_image = TF.to_pil_image(image.add(1).div(2).clamp(0, 1))
+                    video.append_data(np.array(the_image))
+                if j % (steps / 10) == 0 or cur_t == -1:
+                    if not the_image:
+                        the_image = TF.to_pil_image(image.add(1).div(2).clamp(0, 1))
                     tqdm.write(f'Batch {i}, step {j}, output {k}:')
-                    image.save(str(outdir) + '/progress_latest.png')
+                    the_image.save(str(outdir) + '/progress_latest.png')
                     yield j + skip_timesteps
                 yield None
+
 
 
 class Dreamer:
     def __init__(self,
                  prompts,
                  clip_model, *,
-                 outdir: str,
+                 outdir: Path,
                  init_image: Optional[str],
                  ddim_respacing,
                  seed,
                  steps,
                  skip_timesteps,
-                 cut, cut_batch):
+                 cut, cut_batch, perlin):
         self.prompts = prompts
         self.clip = clip_model
-        self.outdir = Path(outdir)
+        self.outdir = outdir
         self.init_image = init_image
         self.ddim_respacing = ddim_respacing
         self.seed = seed
@@ -450,7 +458,9 @@ class Dreamer:
         self.skip_timesteps = skip_timesteps
         self.cut = cut
         self.cut_batch = cut_batch
+        print('creating dir ', self.outdir)
         self.outdir.mkdir(parents=True, exist_ok=True)
+        self.perlin = perlin
 
     def epoch(self):
         return do_run([x[0] for x in self.prompts],
@@ -462,7 +472,7 @@ class Dreamer:
                       self.ddim_respacing,
                       self.init_image,
                       self.cut,
-                      self.cut_batch)
+                      self.cut_batch, self.perlin)
 
     def get_generated_image_path(self) -> Path:
         return self.outdir / 'progress_latest.png'

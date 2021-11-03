@@ -6,6 +6,8 @@ from clip_generators.models.guided_diffusion_hd.clip_guided_old import Dreamer a
 from clip_generators.models.guided_diffusion_hd.clip_guided import Dreamer as Diffusion_dreamer
 from clip_generators.models.guided_diffusion_hd.clip_guided_new import Dreamer as Diffusion_dreamer_new
 from clip_generators.models.taming_transformers.clip_generator.dreamer import Dreamer
+from clip_generators.utils import name_filename_fat32_compatible, get_out_dir
+
 
 class Generator:
     def __init__(self, args: GenerationArgs, clip, user: str):
@@ -30,10 +32,11 @@ class Generator:
                                     ddim_respacing=arguments.model_arguments.ddim_respacing,
                                     seed=arguments.seed,
                                     steps=arguments.steps,
-                                    outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}',
+                                    outdir=name_filename_fat32_compatible(get_out_dir() / f'{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}'),
                                     skip_timesteps=arguments.model_arguments.skips,
                                     cut=arguments.cut,
-                                    cut_batch=arguments.nb_augment
+                                    cut_batch=arguments.nb_augment,
+                                    perlin=arguments.model_arguments.perlin,
                                     )
         return trainer
 
@@ -44,7 +47,7 @@ class Generator:
                           clip_model=self.clip,
                           learning_rate=arguments.model_arguments.learning_rate,
                           save_every=arguments.refresh_every,
-                          outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}',
+                          outdir=name_filename_fat32_compatible(f'/media/lleonard/My Passport/generated_art/out/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}'),
                           device='cuda:0',
                           image_size=(700, 700),
                           crazy_mode=arguments.model_arguments.crazy_mode,
@@ -66,7 +69,7 @@ class Generator:
                                     ddim_respacing=arguments.model_arguments.ddim_respacing,
                                     seed=arguments.seed,
                                     steps=arguments.steps,
-                                    outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}',
+                                    outdir=f'/media/lleonard/My Passport/generated_art/out/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}',
                                     skip_timesteps=arguments.model_arguments.skips,
                                     )
         return trainer
@@ -80,7 +83,7 @@ class Generator:
                                     ddim_respacing=arguments.model_arguments.ddim_respacing,
                                     seed=arguments.seed,
                                     steps=arguments.steps,
-                                    outdir=f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}',
+                                    outdir=f'/media/lleonard/My Passport/generated_art/out/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}',
                                     skip_timesteps=arguments.model_arguments.skips,
                                     )
         return trainer

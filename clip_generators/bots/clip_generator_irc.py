@@ -1,5 +1,6 @@
 import argparse
 import datetime
+import gc
 import shutil
 import threading
 import urllib.parse
@@ -8,10 +9,11 @@ from pathlib import Path
 import clip
 import irc
 import irc.bot
+import torch
 
 from clip_generators.bots.miner import Miner
 from clip_generators.bots.generator import Generator
-from clip_generators.utils import GenerationArgs, parse_prompt_args
+from clip_generators.utils import GenerationArgs, parse_prompt_args, get_out_dir, name_filename_fat32_compatible
 from clip_generators.models.upscaler.upscaler import upscale
 
 
@@ -47,13 +49,20 @@ class IrcBot(irc.bot.SingleServerIRCBot):
                 c.privmsg(self.channel, f'generation {it}/{trainer.steps}')
         trainer.close()
 
-        lr_path = f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_generating_user.nick}_{trainer.prompt.replace("//", "_")}.png'
-        hd_path = f'./discord_out_diffusion/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_generating_user.nick}_{trainer.prompt.replace("//", "_")}_hd.png'
+
+
+        lr_path = name_filename_fat32_compatible(get_out_dir() / f'{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_generating_user.nick}_{trainer.prompt.replace("//", "_")}.png')
+        hd_path = name_filename_fat32_compatible(get_out_dir() / f'{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_generating_user.nick}_{trainer.prompt.replace("//", "_")}_hd.png')
         shutil.copy(trainer.get_generated_image_path(), lr_path)
+        prompt = trainer.prompt
+        del trainer
+        torch.cuda.empty_cache()
+        gc.collect()
+
         c.privmsg(self.channel, "upscaling image...")
         upscale(lr_path, hd_path)
         c.privmsg(self.channel,
-                  f'{trainer.prompt} => http://home.luc-leonard.fr:8082/{urllib.parse.quote(str(Path(hd_path).relative_to("./discord_out_diffusion")))}')
+                  f'{prompt} => http://home.luc-leonard.fr:8082/{urllib.parse.quote(str(Path(hd_path).relative_to("./discord_out_diffusion")))}')
         self.miner.start()
         self.generating = None
         c.privmsg(self.channel, f'Generation done. Ready to take an order')
@@ -63,7 +72,7 @@ class IrcBot(irc.bot.SingleServerIRCBot):
         text = e.arguments[0]
         args = text.split()
 
-        if args[0] == '!' + 'generate':
+        if args[0] == '!generate' or args[0] == '!g':
             self.miner.stop()
             if self.generating is not None:
                 c.privmsg(e.target, f'currently generating {self.generating}, try again later.')

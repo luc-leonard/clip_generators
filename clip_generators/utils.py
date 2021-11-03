@@ -1,5 +1,7 @@
 import argparse
 import io
+import os
+import re
 import shlex
 import time
 from pathlib import Path
@@ -9,6 +11,14 @@ import requests
 from pydantic import BaseModel
 
 from clip_generators.models.taming_transformers.clip_generator.dreamer import network_list
+
+
+def get_out_dir() -> Path:
+    return Path(os.getenv('OUT_DIR', './discord_out_diffusion'))
+
+
+def name_filename_fat32_compatible(path: Path)->Path:
+    return path
 
 
 def fetch(url_or_path):
@@ -28,6 +38,7 @@ networks = network_list()
 class GuidedDiffusionGeneratorArgs(BaseModel):
     skips: int = 0
     ddim_respacing: bool = True
+    perlin: str = None
 
 
 class VQGANGenerationArgs(BaseModel):
@@ -63,12 +74,12 @@ def make_arguments_parser(**kwargs) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument('--crazy-mode', type=bool, default=False)
     parser.add_argument('--learning-rate', type=float, default=0.05)
-    parser.add_argument('--steps', type=int, default=1000)
+    parser.add_argument('--steps', type=int, default=100)
     parser.add_argument('--refresh-every', type=int, default=10)
     parser.add_argument('--resume-from', type=str, default=None)
     parser.add_argument('--prompt', action='append', required=True)
     parser.add_argument('--cut', type=int, default=40)
-    parser.add_argument('--transforms', type=int, default=2)
+    parser.add_argument('--transforms', type=int, default=127)
     parser.add_argument('--full-image-loss', type=bool, default=True)
     parser.add_argument('--network', type=str, default='imagenet')
     parser.add_argument('--network-type', type=str, default='diffusion')
@@ -77,8 +88,9 @@ def make_arguments_parser(**kwargs) -> argparse.ArgumentParser:
     parser.add_argument('--seed', type=int, default=int(time.time()))
     parser.add_argument('--skip', type=int, default=0)
     parser.add_argument('--init-noise-factor', type=float, default=0.0)
+    parser.add_argument('--perlin', type=str, default='')
 
-    parser.set_defaults(ddim_respacing=False, add_noise_to_init=False)
+    parser.set_defaults(ddim_respacing=True)
     parser.set_defaults(**kwargs)
     return parser
 
@@ -92,7 +104,9 @@ def make_model_arguments(parsed_args):
                             learning_rate=parsed_args.learning_rate,
                             init_noise_factor=parsed_args.init_noise_factor)
     else:
-        return GuidedDiffusionGeneratorArgs(skips=parsed_args.skip, ddim_respacing=parsed_args.ddim_respacing)
+        return GuidedDiffusionGeneratorArgs(skips=parsed_args.skip,
+                                            perlin=parsed_args.perlin,
+                                            ddim_respacing=parsed_args.ddim_respacing)
 
 def parse_prompt_args(prompt: str = '') -> GenerationArgs:
     parser = make_arguments_parser()
