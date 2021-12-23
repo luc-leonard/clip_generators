@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import traceback
+from pathlib import Path
 from typing import Dict, Callable
 
 import PIL
@@ -27,7 +28,8 @@ from clip_generators.utils import make_arguments_parser
 from clip_generators.models.upscaler.upscaler import upscale
 from clip_generators.models.taming_transformers.clip_generator.generator import fetch
 from clip_generators.utils import name_filename_fat32_compatible, get_out_dir
-
+from clip_generators.models.rudalle.rudalle import RudalleGenerator
+from rudalle import get_realesrgan
 
 class DreamerClient(discord.Client):
     def __init__(self, **options):
@@ -44,6 +46,7 @@ class DreamerClient(discord.Client):
 
         self.miner_enabled = True
         self.miner = Miner('/home/lleonard/t-rex/launch.sh')
+        self.dalle_generator = None
 
     async def on_ready(self):
         print(f'{self.user} has connected to Discord!')
@@ -52,8 +55,11 @@ class DreamerClient(discord.Client):
         return {
             '!generate': self.generate_command,
             '!g': self.generate_command,
+            '!dall-e': self.dalle_command,
+            '!d': self.dalle_command,
             '!set': self.set_command,
             '!stop': self.stop_command,
+
            # '!leave': self.leave_command,
             '!help': self.help_command,
             '!mine': self.mine_command,
@@ -92,8 +98,11 @@ class DreamerClient(discord.Client):
 
 
     def restart_command(self, message):
-        self.miner.stop()
-        os.execv(sys.argv[0], sys.argv)
+        self.dalle_generator = None
+        # self.
+        torch.cuda.empty_cache()
+        gc.collect()
+        self.loop.create_task(message.channel.send('Restarted'))
 
     def mine_command(self, message):
         prompt = message.content[len("!mine") + 1:]
@@ -108,32 +117,89 @@ class DreamerClient(discord.Client):
     def stop_command(self, message: discord.Message):
         if self.current_user == message.author:
             self.stop_flag = True
+            if self.dalle_generator:
+                self.dalle_generator.stop()
         else:
             self.loop.create_task(message.channel.send(f'Only {self.current_user} can stop me'))
 
     def leave_command(self, message: discord.Message):
         self.loop.create_task(message.guild.leave())
 
+    async def dalle(self, message: discord.Message):
+        try:
+            self.current_user = message.author
+
+            content = message.content[message.content.index(' ') + 1:]
+            arguments = parse_prompt_args(content, 'rudalle')
+            prompt = arguments.prompts[0][0]
+            image_prompt = arguments.resume_from
+            prompt_cut_top = arguments.model_arguments.image_cut_top
+
+            if message.guild is not None:
+                message_to_start_thread = await message.channel.send(prompt)
+                channel = await message_to_start_thread.create_thread(name=prompt[:90], )
+            else:
+                channel = message.channel
+
+            self.miner.stop()
+            if not self.dalle_generator or self.dalle_generator.emoji != arguments.model_arguments.emoji:
+                torch.cuda.empty_cache()
+                gc.collect()
+                self.dalle_generator = RudalleGenerator(emoji=arguments.model_arguments.emoji)
+
+            now = datetime.datetime.now()
+
+            images_batches = self.dalle_generator.generate(prompt, int(time.time()),
+                                                           Path(f'./res/ruDalle/{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{message.author}_{prompt}'),
+                                                           image_prompt,
+                                                           prompt_cut_top, arguments.model_arguments.nb_images)
+            for batch in images_batches:
+                if batch is None:
+                    break
+                await channel.send('Images', file=discord.File(batch))
+
+            last_images = next(images_batches)
+            await message.channel.send('Top ', file=discord.File(last_images))
+            torch.cuda.empty_cache()
+            gc.collect()
+            self.miner.start()
+        except Exception as ex:
+            print(ex)
+            print(traceback.format_exc())
+            await message.channel.send(f'{ex}')
+
+    def dalle_command(self, message: discord.Message):
+        if self.generating:
+            self.loop.create_task(message.channel.send(f'already generating for {self.current_user}'))
+            return
+        self.loop.create_task(self.dalle(message))
+
+
     def generate_command(self, message: discord.Message):
+        self.dalle_generator = None
+        torch.cuda.empty_cache()
+        gc.collect()
+
         if self.generating:
             self.loop.create_task(message.channel.send(f'already generating for {self.current_user}'))
             return
 
         self.miner.stop()
 
+        self.dalle_generator = None
+        torch.cuda.empty_cache()
+        gc.collect()
+
         prompt = message.content[message.content.index(' ') + 1:]
-        if '--prompt' in prompt:
-            try:
-                arguments = parse_prompt_args(prompt)
-            except Exception as ex:
-                print(ex)
-                self.loop.create_task(message.channel.send('error: ' + str(ex)))
-                return
-        else:
-            arguments = parse_prompt_args('--prompt "osef;1"')
-            arguments.prompts = [(prompt, 1.0)]
+        try:
+            arguments = parse_prompt_args(prompt, 'diffusion')
+        except Exception as ex:
+            print(ex)
+            self.loop.create_task(message.channel.send('error: ' + str(ex)))
+            return
 
         self.current_user = message.author
+
         dreamer = Generator(arguments, self.clip, str(self.current_user)).dreamer
 
         (dreamer.outdir / 'args.txt').write_text(arguments.json())
