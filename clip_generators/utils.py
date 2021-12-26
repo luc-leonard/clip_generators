@@ -64,6 +64,11 @@ class RudalleGenerationArgs(BaseModel):
     image_cut_top: Optional[int] = None
     emoji: bool = False
 
+
+class GlideGenerationArgs(BaseModel):
+    ...
+
+
 class GenerationArgs(BaseModel):
     prompts: List[Tuple[str, float]] = []
     steps: int = 500
@@ -88,19 +93,20 @@ def make_arguments_parser(**kwargs) -> argparse.ArgumentParser:
     parser.add_argument('--transforms', type=int, default=127)
     parser.add_argument('--full-image-loss', type=bool, default=True)
     parser.add_argument('--network', type=str, default='imagenet')
-    parser.add_argument('--network-type', type=str, default='rudalle')
+    parser.add_argument('--network-type', type=str, default='glide')
     parser.add_argument('--ddim', dest='ddim_respacing', action='store_true')
     parser.add_argument('--no-ddim', dest='ddim_respacing', action='store_false')
     parser.add_argument('--seed', type=int, default=int(time.time()))
     parser.add_argument('--skip', type=int, default=0)
     parser.add_argument('--init-noise-factor', type=float, default=0.0)
     parser.add_argument('--perlin', type=str, default='')
-    parser.add_argument('--emoji', default=False, action='store_true')
+
     parser.add_argument('--size', default=None, type=int)
     #rudalle
-
+    parser.add_argument('--emoji', default=False, action='store_true')
     parser.add_argument('--images', type=int, default=3)
     parser.add_argument('--cut-top', type=int, default=4)
+
     parser.set_defaults(ddim_respacing=True)
     parser.set_defaults(**kwargs)
     return parser
@@ -121,6 +127,8 @@ def make_model_arguments(parsed_args):
                                             ddim_respacing=parsed_args.ddim_respacing)
     elif parsed_args.network_type == 'rudalle':
         return RudalleGenerationArgs(nb_images=parsed_args.images, emoji=parsed_args.emoji, image_cut_top=parsed_args.cut_top)
+    elif parsed_args.network_type == 'glide':
+        return GlideGenerationArgs()
 
 
 def parse_prompt_args(prompt: str = '', default_generator='') -> GenerationArgs:

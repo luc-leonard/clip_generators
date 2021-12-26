@@ -1,4 +1,5 @@
 import datetime
+import time
 
 from clip_generators.models.taming_transformers.clip_generator.generator import load_vqgan_model
 from clip_generators.utils import GenerationArgs
@@ -8,6 +9,7 @@ from clip_generators.models.guided_diffusion_hd.clip_guided_new import Dreamer a
 from clip_generators.models.taming_transformers.clip_generator.dreamer import Dreamer
 from clip_generators.utils import name_filename_fat32_compatible, get_out_dir
 from clip_generators.models.new_diffusion.clip_sample import NewGenDiffusionDreamer
+from clip_generators.models.glide.dreamer import GlideDreamer
 
 
 class Generator:
@@ -19,25 +21,16 @@ class Generator:
             self.dreamer = self.make_dreamer_diffusion(args)
         elif args.network_type == 'vqgan':
             self.dreamer = self.make_dreamer_vqgan(args)
+        elif args.network_type == 'glide':
+            self.dreamer = self.make_dreamer_glide(args)
 
     def make_dreamer_diffusion(self, arguments: GenerationArgs):
         now = datetime.datetime.now()
         return NewGenDiffusionDreamer(arguments.model_arguments.size, arguments.prompts, [],
+                                      seed=arguments.seed,
                                       steps=arguments.steps,
                                       outdir=name_filename_fat32_compatible(get_out_dir() / f'{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}'))
-        # trainer = Diffusion_dreamer(arguments.prompts,
-        #                             self.clip,
-        #                             init_image=arguments.resume_from,
-        #                             ddim_respacing=arguments.model_arguments.ddim_respacing,
-        #                             seed=arguments.seed,
-        #                             steps=arguments.steps,
-        #                             outdir=name_filename_fat32_compatible(get_out_dir() / f'{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}'),
-        #                             skip_timesteps=arguments.model_arguments.skips,
-        #                             cut=arguments.cut,
-        #                             cut_batch=arguments.nb_augment,
-        #                             perlin=arguments.model_arguments.perlin,
-        #                             )
-        # return trainer
+
 
     def make_dreamer_vqgan(self, arguments: GenerationArgs):
         now = datetime.datetime.now()
@@ -58,3 +51,6 @@ class Generator:
                           init_noise_factor=arguments.model_arguments.init_noise_factor
                           )
         return trainer
+
+    def make_dreamer_glide(self, _):
+        return GlideDreamer(9, 3.0)

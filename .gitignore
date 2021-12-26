@@ -132,3 +132,4 @@ dmypy.json
 *.pt
 *.ckpt
 /clip_generators/bots/discord_out_diffusion/
+/clip_generators/bots/res/
