@@ -130,6 +130,7 @@ dmypy.json
 
 # pytorch models
 *.pt
+*.pth
 *.ckpt
 /clip_generators/bots/discord_out_diffusion/
 /clip_generators/bots/res/
