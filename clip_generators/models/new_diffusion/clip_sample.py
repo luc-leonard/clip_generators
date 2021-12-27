@@ -128,7 +128,7 @@ def sample(size=None, prompts=[], images=[], batch_size=1, n=1, seed=0, steps=10
             outs = run(x[i:i + cur_batch_size], steps, clip_embed[i:i + cur_batch_size])
             for j, out in enumerate(outs):
                 utils.to_pil_image(out).save(f'./{outdir}/out.png')
-                yield f'{outdir}/out.png'
+                yield j, f'{outdir}/out.png'
 
     try:
         return run_all(n, batch_size)

@@ -1,3 +1,5 @@
+import datetime
+import time
 from pathlib import Path
 from typing import Dict, Union, Any
 
@@ -15,6 +17,7 @@ from glide_text2im.model_creation import (
     model_and_diffusion_defaults,
     model_and_diffusion_defaults_upsampler,
 )
+from clip_generators.utils import GenerationArgs
 
 device = 'cuda'
 
@@ -92,31 +95,42 @@ def upsample(samples, model_up, diffusion_up, options_up, prompt, batch_size):
     return up_samples
 
 
-def save(batch: th.Tensor, out_path: Path):
+def save(batch: th.Tensor, out_path: Path, all):
     """ Display a batch of images inline. """
     scaled = ((batch + 1)*127.5).round().clamp(0,255).to(th.uint8).cpu()
-    scaled = make_grid(scaled, nrow=3).permute(1, 2, 0)
-    #reshaped = scaled.permute(2, 0, 3, 1).reshape([batch.shape[2], -1, 3])
-    Image.fromarray(scaled.numpy()).save(out_path)
+    grid = make_grid(scaled, nrow=3).permute(1, 2, 0)
+
+    if all:
+        for i, image in enumerate(scaled):
+            Image.fromarray(image.permute(1, 2, 0).numpy()).save(out_path.parent / f"{i}.png")
+    Image.fromarray(grid.numpy()).save(out_path)
 
 
 def generate(model, diffusion, options, up_model, diffusion_up, options_up, clip_model, prompt, batch_size,
              guidance_scale, out_dir):
     samples = generate_small(model, diffusion, options, clip_model, prompt, batch_size, guidance_scale)
-    save(samples, out_dir / "samples.png")
+    save(samples, out_dir / "samples.png", False)
     yield 1, out_dir / "samples.png"
     upsamples = upsample(samples, up_model, diffusion_up, options_up, prompt, batch_size)
-    save(upsamples, out_dir / "upsamples.png")
-    save(upsamples, out_dir / ".." / f"{prompt}.png")
+    save(upsamples, out_dir / "upsamples.png", True)
+    now = time.time()
+    save(upsamples, out_dir / ".." / f'{now}_{prompt}.png', False)
     yield 2, out_dir / "upsamples.png"
 
 class GlideDreamer:
     options: Dict[str, Any]
 
-    def __init__(self, batch_size, clip_guidance):
+    def __init__(self, batch_size, clip_guidance, steps, upscale_steps):
         self.batch_size = batch_size
         self.clip_guidance = clip_guidance
+        self.steps = steps
+        self.upscale_steps = upscale_steps
+
+
         self.make_models()
+
+    def same_arguments(self, args: GenerationArgs):
+        return  self.clip_guidance == args.model_arguments.clip_guidance_scale and self.steps == args.steps and self.upscale_steps == args.model_arguments.upsample_steps
 
     def make_models(self):
         self.make_generator_model()
@@ -132,7 +146,7 @@ class GlideDreamer:
     def make_upscale_model(self):
         options_up = model_and_diffusion_defaults_upsampler()
         options_up['use_fp16'] = True
-        options_up['timestep_respacing'] = 'fast27'  # use 27 diffusion steps for very fast sampling
+        options_up['timestep_respacing'] = self.upscale_steps  # use 27 diffusion steps for very fast sampling
         model_up, diffusion_up = create_model_and_diffusion(**options_up)
         model_up.eval()
         model_up.convert_to_fp16()
@@ -147,7 +161,7 @@ class GlideDreamer:
     def make_generator_model(self):
         options = model_and_diffusion_defaults()
         options['use_fp16'] = True
-        options['timestep_respacing'] = 'ddim100'  # use 100 diffusion steps for fast sampling
+        options['timestep_respacing'] = self.steps  # use 100 diffusion steps for fast sampling
         model, diffusion = create_model_and_diffusion(**options)
         model.eval()
         model.convert_to_fp16()
