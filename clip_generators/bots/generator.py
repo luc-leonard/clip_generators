@@ -10,6 +10,7 @@ from clip_generators.models.taming_transformers.clip_generator.dreamer import Dr
 from clip_generators.utils import name_filename_fat32_compatible, get_out_dir
 from clip_generators.models.new_diffusion.clip_sample import NewGenDiffusionDreamer
 from clip_generators.models.glide.dreamer import GlideDreamer
+from clip_generators.utils import GlideGenerationArgs
 
 
 class Generator:
@@ -26,7 +27,7 @@ class Generator:
 
     def make_dreamer_diffusion(self, arguments: GenerationArgs):
         now = datetime.datetime.now()
-        return NewGenDiffusionDreamer(arguments.model_arguments.size, arguments.prompts, [],
+        return NewGenDiffusionDreamer(arguments.model_arguments.size, [],
                                       seed=arguments.seed,
                                       steps=arguments.steps,
                                       outdir=name_filename_fat32_compatible(get_out_dir() / f'{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}'))
@@ -52,5 +53,6 @@ class Generator:
                           )
         return trainer
 
-    def make_dreamer_glide(self, _):
-        return GlideDreamer(9, 3.0)
+    def make_dreamer_glide(self, arguments: GenerationArgs):
+        model_arguments: GlideGenerationArgs = arguments.model_arguments
+        return GlideDreamer(9, model_arguments.clip_guidance_scale, arguments.steps, model_arguments.upsample_steps)

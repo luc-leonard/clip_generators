@@ -31,6 +31,10 @@ from clip_generators.utils import name_filename_fat32_compatible, get_out_dir
 from clip_generators.models.rudalle.rudalle import RudalleGenerator
 from rudalle import get_realesrgan
 
+
+import warnings
+warnings.filterwarnings("ignore")
+
 class DreamerClient(discord.Client):
     def __init__(self, **options):
         super().__init__(**options)
@@ -145,7 +149,7 @@ class DreamerClient(discord.Client):
 
         self.current_user = message.author
 
-        if self.current_dreamer is None or arguments.network_type != self.current_dreamer.type():
+        if self.current_dreamer is None or arguments.network_type != self.current_dreamer.type() or self.current_dreamer.same_arguments(arguments) is False:
             dreamer = Generator(arguments, self.clip, str(self.current_user)).dreamer
             self.current_dreamer = dreamer
         else:
@@ -170,10 +174,11 @@ class DreamerClient(discord.Client):
         await channel.send('generating...')
 
         now = datetime.datetime.now()
-        out_dir = name_filename_fat32_compatible(get_out_dir() / f'{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}')
+        out_dir = name_filename_fat32_compatible(get_out_dir() / f'{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{arguments.prompts[0][0]}')
         try:
             Path(out_dir).mkdir(parents=True, exist_ok=True)
             (Path(out_dir) / 'args.txt').write_text(arguments.json())
+            torch.manual_seed(arguments.seed)
             for it in dreamer.generate(arguments.prompts, out_dir):
                 if it is not None:
                     await self.send_progress(channel, it)

@@ -66,12 +66,13 @@ class RudalleGenerationArgs(BaseModel):
 
 
 class GlideGenerationArgs(BaseModel):
-    ...
+    clip_guidance_scale: float = 3.0
+    upsample_steps: str = 'fast27'
 
 
 class GenerationArgs(BaseModel):
     prompts: List[Tuple[str, float]] = []
-    steps: int = 500
+    steps: str = '500'
     network_type: str
     refresh_every: int = 100
     seed: int
@@ -83,17 +84,24 @@ class GenerationArgs(BaseModel):
 
 def make_arguments_parser(**kwargs) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
+    # for all
+    parser.add_argument('prompt', nargs=argparse.REMAINDER)
+
+    parser.add_argument('--network-type', type=str, default='glide')
+    parser.add_argument('--steps', type=str, default='ddim100')
+    parser.add_argument('--resume-from', type=str, default=None)
+
     parser.add_argument('--crazy-mode', type=bool, default=False)
     parser.add_argument('--learning-rate', type=float, default=0.05)
-    parser.add_argument('--steps', type=int, default=100)
+
     parser.add_argument('--refresh-every', type=int, default=10)
-    parser.add_argument('--resume-from', type=str, default=None)
-    parser.add_argument('prompt', nargs=argparse.REMAINDER)
+
+
     parser.add_argument('--cut', type=int, default=40)
     parser.add_argument('--transforms', type=int, default=127)
     parser.add_argument('--full-image-loss', type=bool, default=True)
     parser.add_argument('--network', type=str, default='imagenet')
-    parser.add_argument('--network-type', type=str, default='glide')
+
     parser.add_argument('--ddim', dest='ddim_respacing', action='store_true')
     parser.add_argument('--no-ddim', dest='ddim_respacing', action='store_false')
     parser.add_argument('--seed', type=int, default=int(time.time()))
@@ -106,6 +114,9 @@ def make_arguments_parser(**kwargs) -> argparse.ArgumentParser:
     parser.add_argument('--emoji', default=False, action='store_true')
     parser.add_argument('--images', type=int, default=3)
     parser.add_argument('--cut-top', type=int, default=4)
+
+    parser.add_argument('--clip-guidance-scale', type=float, default=3.0)
+    parser.add_argument('--upsample-steps', type=str, default='fast27')
 
     parser.set_defaults(ddim_respacing=True)
     parser.set_defaults(**kwargs)
@@ -128,7 +139,8 @@ def make_model_arguments(parsed_args):
     elif parsed_args.network_type == 'rudalle':
         return RudalleGenerationArgs(nb_images=parsed_args.images, emoji=parsed_args.emoji, image_cut_top=parsed_args.cut_top)
     elif parsed_args.network_type == 'glide':
-        return GlideGenerationArgs()
+        return GlideGenerationArgs(clip_guidance_scale=parsed_args.clip_guidance_scale,
+                                   upsample_steps=parsed_args.upsample_steps)
 
 
 def parse_prompt_args(prompt: str = '', default_generator='') -> GenerationArgs:
