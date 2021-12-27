@@ -132,7 +132,7 @@ dmypy.json
 *.pt
 *.pth
 *.ckpt
-1
+*.gz
 
 /clip_generators/bots/discord_out_diffusion/
 /clip_generators/bots/res/
@@ -140,4 +140,4 @@ dmypy.json
 
 *.iml
 *.xml
-/clip_generators/bots/glide_model_cache/
+/clip_generators/bots/glide_model_cache
