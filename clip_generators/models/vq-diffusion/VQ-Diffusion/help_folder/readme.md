@@ -1,1 +1,0 @@
-Statistics folder contains some dictionary to shrink the codebook from [Taming Transformer](https://github.com/CompVis/taming-transformers).

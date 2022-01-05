@@ -20,6 +20,8 @@ class Generator:
         self.user = user
         if args.network_type == 'diffusion':
             self.dreamer = self.make_dreamer_diffusion(args)
+        if args.network_type == 'legacy_diffusion':
+            self.dreamer = self.make_dreamer_legacy_diffusion(args)
         elif args.network_type == 'vqgan':
             self.dreamer = self.make_dreamer_vqgan(args)
         elif args.network_type == 'glide':
@@ -30,6 +32,14 @@ class Generator:
         return NewGenDiffusionDreamer(arguments.model_arguments.size, [],
                                       seed=arguments.seed,
                                       steps=arguments.steps,
+                                      cutn=arguments.cut,
+                                      transform=arguments.transforms,
+                                      skip_steps=arguments.model_arguments.skips,
+                                      n=arguments.model_arguments.n,
+                                      init=arguments.resume_from,
+                                      model=arguments.model_arguments.model,
+                                      eta=0.0 if arguments.model_arguments.ddim_respacing else 1.0,
+                                      clip_guidance_scale=arguments.model_arguments.clip_guidance_scale,
                                       outdir=name_filename_fat32_compatible(get_out_dir() / f'{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}'))
 
 
@@ -55,4 +65,8 @@ class Generator:
 
     def make_dreamer_glide(self, arguments: GenerationArgs):
         model_arguments: GlideGenerationArgs = arguments.model_arguments
-        return GlideDreamer(9, model_arguments.clip_guidance_scale, arguments.steps, model_arguments.upsample_steps)
+        return GlideDreamer(27, model_arguments.clip_guidance_scale / 1000, arguments.steps, model_arguments.upsample_steps)
+
+    def make_dreamer_legacy_diffusion(self, args):
+        return Diffusion_dreamer_new(self.clip, seed=args.seed)
+

@@ -17,8 +17,11 @@ def get_out_dir() -> Path:
     return Path(os.getenv('OUT_DIR', './res/discord_out_diffusion'))
 
 
-def name_filename_fat32_compatible(path: Path)->Path:
-    return path
+def name_filename_fat32_compatible(path: Path) -> Path:
+    path_str = str(path)
+
+    path_str = str(path_str).replace(' ', '_')
+    return Path(path_str)
 
 
 def fetch(url_or_path):
@@ -36,10 +39,13 @@ networks = network_list()
 
 
 class GuidedDiffusionGeneratorArgs(BaseModel):
-    skips: int = 0
+    skips: float = 0.0
     ddim_respacing: bool = True
     perlin: str = None
-    size: Optional[int] = None
+    size: Optional[Tuple[int, int]] = None
+    clip_guidance_scale: float = 300
+    model: str = 'yfcc_2'
+    n: int = 1
 
 
 class VQGANGenerationArgs(BaseModel):
@@ -78,8 +84,9 @@ class GenerationArgs(BaseModel):
     seed: int
     resume_from: Optional[str] = None
     cut: int = 64
-    nb_augment: int = 2
+    transforms: bool = True
     model_arguments: Any
+    upsample: bool = True
 
 
 def make_arguments_parser(**kwargs) -> argparse.ArgumentParser:
@@ -96,29 +103,30 @@ def make_arguments_parser(**kwargs) -> argparse.ArgumentParser:
 
     parser.add_argument('--refresh-every', type=int, default=10)
 
-
-    parser.add_argument('--cut', type=int, default=40)
-    parser.add_argument('--transforms', type=int, default=127)
+    parser.add_argument('--cut', type=int, default=64)
+    parser.add_argument('--transforms', dest='transforms', action='store_true')
     parser.add_argument('--full-image-loss', type=bool, default=True)
-    parser.add_argument('--network', type=str, default='imagenet')
+    parser.add_argument('--model', type=str, default='yfcc_2')
 
     parser.add_argument('--ddim', dest='ddim_respacing', action='store_true')
     parser.add_argument('--no-ddim', dest='ddim_respacing', action='store_false')
     parser.add_argument('--seed', type=int, default=int(time.time()))
-    parser.add_argument('--skip', type=int, default=0)
+    parser.add_argument('--skip', type=float, default=0.9)
     parser.add_argument('--init-noise-factor', type=float, default=0.0)
     parser.add_argument('--perlin', type=str, default='')
 
-    parser.add_argument('--size', default=None, type=int)
+    parser.add_argument('--size', default=None, type=str)
     #rudalle
     parser.add_argument('--emoji', default=False, action='store_true')
-    parser.add_argument('--images', type=int, default=3)
+    parser.add_argument('--images', type=int, default=None)
     parser.add_argument('--cut-top', type=int, default=4)
 
-    parser.add_argument('--clip-guidance-scale', type=float, default=3.0)
+    parser.add_argument('--clip-guidance-scale', type=float, default=500)
     parser.add_argument('--upsample-steps', type=str, default='fast27')
+    parser.add_argument('--prompt-weight', type=int, default=3)
+    parser.add_argument('--upsample', default=False, action='store_true')
 
-    parser.set_defaults(ddim_respacing=True)
+    parser.set_defaults(ddim_respacing=True, transforms=False)
     parser.set_defaults(**kwargs)
     return parser
 
@@ -126,16 +134,25 @@ def make_arguments_parser(**kwargs) -> argparse.ArgumentParser:
 def make_model_arguments(parsed_args):
     if parsed_args.network_type == 'vqgan':
         return VQGANGenerationArgs(network=parsed_args.network,
-                            nb_augments=parsed_args.transforms,
-                            full_image_loss=parsed_args.full_image_loss,
-                            crazy_mode=parsed_args.crazy_mode,
-                            learning_rate=parsed_args.learning_rate,
-                            init_noise_factor=parsed_args.init_noise_factor)
-    elif parsed_args.network_type == 'diffusion':
+                                   nb_augments=parsed_args.apply_transforms,
+                                   full_image_loss=parsed_args.full_image_loss,
+                                   crazy_mode=parsed_args.crazy_mode,
+                                   learning_rate=parsed_args.learning_rate,
+                                   init_noise_factor=parsed_args.init_noise_factor)
+    elif parsed_args.network_type == 'diffusion' or parsed_args.network_type == 'legacy_diffusion':
+        if parsed_args.size is not None:
+            if ',' in parsed_args.size:
+                parsed_args.size = tuple(int(x) for x in parsed_args.size.split(','))
+            else:
+                parsed_args.size = (int(parsed_args.size), int(parsed_args.size))
         return GuidedDiffusionGeneratorArgs(skips=parsed_args.skip,
+                                            n=parsed_args.images,
                                             perlin=parsed_args.perlin,
                                             size=parsed_args.size,
+                                            model=parsed_args.model,
+                                            clip_guidance_scale=parsed_args.clip_guidance_scale,
                                             ddim_respacing=parsed_args.ddim_respacing)
+
     elif parsed_args.network_type == 'rudalle':
         return RudalleGenerationArgs(nb_images=parsed_args.images, emoji=parsed_args.emoji, image_cut_top=parsed_args.cut_top)
     elif parsed_args.network_type == 'glide':
@@ -148,15 +165,17 @@ def parse_prompt_args(prompt: str = '', default_generator='') -> GenerationArgs:
     try:
         parsed_args = parser.parse_args(shlex.split(prompt))
         print('arguments', parsed_args)
-        args = GenerationArgs(prompts=[(' '.join(parsed_args.prompt), 1.0)],
+        args = GenerationArgs(prompts=[(' '.join(parsed_args.prompt), parsed_args.prompt_weight)],
                               refresh_every=parsed_args.refresh_every,
                               resume_from=parsed_args.resume_from,
                               steps=parsed_args.steps,
                               cut=parsed_args.cut,
                               network_type=parsed_args.network_type,
+                              transforms=parsed_args.transforms,
                               seed=parsed_args.seed,
                               skips=parsed_args.skip,
-                              model_arguments=make_model_arguments(parsed_args)
+                              model_arguments=make_model_arguments(parsed_args),
+                              upsample=parsed_args.upsample,
                               )
         print('parsed arguments', args)
         return args

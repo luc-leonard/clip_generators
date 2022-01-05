@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Dict, Callable
 
 import PIL
+import PIL.Image
 import clip
 import discord
 import progressbar
@@ -33,6 +34,9 @@ from rudalle import get_realesrgan
 
 
 import warnings
+
+from clip_generators.models.upscaler.upscaler import latent_upscale
+
 warnings.filterwarnings("ignore")
 
 class DreamerClient(discord.Client):
@@ -65,7 +69,7 @@ class DreamerClient(discord.Client):
            # '!leave': self.leave_command,
             '!help': self.help_command,
             '!mine': self.mine_command,
-            '!upscale': self.upscale_command,
+            '!upsample': self.upsample_command,
             '!restart': self.restart_command
         }
 
@@ -84,27 +88,37 @@ class DreamerClient(discord.Client):
     def set_command(self, message):
         ...
 
-    def upscale_command(self, message):
-        remote_url = message.content[len('!upscale') + 1:]
-        with fetch(remote_url) as remote_file:
-            with open('/tmp/temp', 'wb') as local_file:
-                local_file.write(remote_file.read())
-                upscale('/tmp/temp', '/tmp/temp_hd.png')
-                hd_image = PIL.Image.open('/tmp/temp_hd.png')
-                hd_image.thumbnail((1024, 1024))
-                stream = io.BytesIO()
+    def upsample_command(self, message):
+        try:
+            self.loop.create_task(message.channel.send('Upsampling...'))
+            remote_url = message.content[len('!upsample') + 1:]
+            with fetch(remote_url) as remote_file:
+                with open('/tmp/temp', 'wb') as local_file:
+                    local_file.write(remote_file.read())
+                    self.miner.stop()
+                    self.restart_command(None)
+                    latent_upscale('/tmp/temp', '/tmp/temp_hd.png')
+                    self.miner.start()
+                    self.restart_command(None)
+                    hd_image = PIL.Image.open('/tmp/temp_hd.png')
+                    hd_image.thumbnail((1024, 1024))
+                    stream = io.BytesIO()
 
-                hd_image.save(stream, format='PNG')
-                stream.seek(0)
-                self.loop.create_task(message.reply(f'', files=[discord.File(stream, filename='upsampled.png')]))
+                    hd_image.save(stream, format='PNG')
+                    stream.seek(0)
+                    self.loop.create_task(message.reply(f'', files=[discord.File(stream, filename='upsampled.png')]))
+        except Exception as e:
+            self.loop.create_task(message.reply(f'Error: {e}'))
 
 
     def restart_command(self, message):
         self.dalle_generator = None
+        self.current_dreamer = None
         # self.
         torch.cuda.empty_cache()
         gc.collect()
-        self.loop.create_task(message.channel.send('Restarted'))
+
+        #self.loop.create_task(message.channel.send('Restarted'))
 
     def mine_command(self, message):
         prompt = message.content[len("!mine") + 1:]
@@ -162,7 +176,7 @@ class DreamerClient(discord.Client):
         self.loop.create_task(self.generate(dreamer, message, arguments))
 
     async def send_progress(self, channel, iteration):
-        await channel.send(f'step {iteration[0]}', file=discord.File(iteration[1]))
+        await channel.send(f'step {iteration[0]}', files=[discord.File(f) for f in iteration[1]])
 
     async def generate(self, dreamer, message: discord.Message, arguments):
         if message.guild is not None:
@@ -179,15 +193,43 @@ class DreamerClient(discord.Client):
             Path(out_dir).mkdir(parents=True, exist_ok=True)
             (Path(out_dir) / 'args.txt').write_text(arguments.json())
             torch.manual_seed(arguments.seed)
+            last_it = None
             for it in dreamer.generate(arguments.prompts, out_dir):
                 if it is not None:
+                    last_it = it
                     await self.send_progress(channel, it)
                 await asyncio.sleep(0)
                 if self.stop_flag:
                     break
             dreamer.close()
 
-            await message.reply(f'', files=[discord.File(it[1], filename='upsampled.png')])
+            if arguments.upsample and hasattr(dreamer, 'upsampler'):
+                paths = []
+                for i, path in enumerate(last_it[1]):
+                    upscaled_path = name_filename_fat32_compatible(
+                        get_out_dir() / f'{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{arguments.prompts[0][0]}_{i}_hd.png')
+                    half_path = name_filename_fat32_compatible(
+                       out_dir / f'{now.isoformat()}_{self.current_user}_{arguments.prompts[0][0]}_{i}_half.png')
+                    dreamer.upsampler()(path, upscaled_path)
+
+                    upscaled_image = PIL.Image.open(upscaled_path)
+                    if upscaled_image.size[0] > 1024:
+                        upscaled_image = upscaled_image.resize((upscaled_image.size[0] // 2, upscaled_image.size[1] // 2))
+
+                    half_image = PIL.Image.new('RGB', (1024, 1024), color=(255, 255, 255))
+                    half_image.paste(upscaled_image, (0, 0))
+                    half_image.save(half_path)
+                    paths.append(half_path)
+
+                await message.reply(f'', files=[discord.File(p) for p in paths])
+            else:
+                paths = []
+                for i, path in enumerate(last_it[1]):
+                    last_path = name_filename_fat32_compatible(dreamer.outdir.parent / f'{now.isoformat()}_{arguments.prompts[0][0]}_{i}.png')
+                    shutil.copyfile(path, last_path)
+                    paths.append(last_path)
+                await message.reply(f'', files=[discord.File(p) for p in paths])
+
 
         except Exception as ex:
             print(ex)
@@ -195,6 +237,7 @@ class DreamerClient(discord.Client):
             await channel.send(str(ex))
 
         self.generating = False
+        self.restart_command(None)
         self.miner.start()
 
 

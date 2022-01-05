@@ -26,7 +26,7 @@ from datetime import datetime
 import numpy as np
 import random
 
-
+from clip_generators.models.upscaler.upscaler import upscale
 
 device = 'cuda:0'
 
@@ -245,15 +245,15 @@ model_list = [
 ]
 
 def do_run(prompts, clip_model, outdir, seed, init_image):
-    diffusion_steps = 1000
+    #diffusion_steps = 1000
 
     model_config = model_and_diffusion_defaults()
     model_config.update({
         'attention_resolutions': '32, 16, 8',
         'class_cond': False,
-        'diffusion_steps': diffusion_steps,
+        'diffusion_steps': 1000,
         'rescale_timesteps': True,
-        'timestep_respacing': 'ddim500',
+        'timestep_respacing': 'ddim100',
         'image_size': 512,
         'learn_sigma': True,
         'noise_schedule': 'linear',
@@ -386,39 +386,28 @@ def do_run(prompts, clip_model, outdir, seed, init_image):
                 if j % 10 == 0 or cur_t == -1:
                     tqdm.write(f'Batch {i}, step {j}, output {k}:')
                     image.save(str(outdir) + '/progress_latest.png')
-                    yield j
+                    yield j, str(outdir) + '/progress_latest.png'
 
 
 class Dreamer:
     def __init__(self,
-                 prompts,
                  clip_model, *,
-                 outdir: str,
-                 init_image: Optional[str],
-                 ddim_respacing,
-                 seed,
-                 steps,
-                 skip_timesteps):
-        self.prompts = prompts
+                 init_image: Optional[str] = None,
+                 seed,):
         self.clip = clip_model
-        self.outdir = Path(outdir)
         self.init_image = init_image
-        self.ddim_respacing = ddim_respacing
         self.seed = seed
         self.steps = 124 #yes it is hardcoded :)
-        self.skip_timesteps = skip_timesteps
 
-        self.outdir.mkdir(parents=True, exist_ok=True)
 
-    def epoch(self):
-        return do_run([x[0] for x in self.prompts], {"ViT-B/16": self.clip}, self.outdir, self.seed, self.init_image)
+    def type(self):
+        return 'diffusion'
 
-    def get_generated_image_path(self) -> Path:
-        return self.outdir / 'progress_latest.png'
+    def generate(self, prompt, out_dir):
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        return do_run([x[0] for x in prompt], {"ViT-B/16": self.clip}, out_dir, self.seed, self.init_image)
 
-    def close(self):
-        ...
+    def upsampler(self):
+        return upscale
 
-    @property
-    def prompt(self):
-        return self.prompts[0][0]
+    def same_arguments(self, _): return False
