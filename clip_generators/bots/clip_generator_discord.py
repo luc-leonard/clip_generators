@@ -43,7 +43,8 @@ class DreamerClient(discord.Client):
     def __init__(self, **options):
         super().__init__(**options)
 
-        self.clip = clip.load('ViT-B/16', jit=False)[0].eval().requires_grad_(False).to('cuda:0')
+        #self.clip = clip.load('ViT-B/16', jit=False)[0].eval().requires_grad_(False).to('cuda:0')
+        self.clip = None
         self.current_user = None
         self.stop_flag = False
         self.commands = self.make_commands()

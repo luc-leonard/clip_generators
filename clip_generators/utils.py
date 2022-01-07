@@ -121,9 +121,9 @@ def make_arguments_parser(**kwargs) -> argparse.ArgumentParser:
     parser.add_argument('--images', type=int, default=None)
     parser.add_argument('--cut-top', type=int, default=4)
 
-    parser.add_argument('--clip-guidance-scale', type=float, default=500)
+    parser.add_argument('--clip-guidance-scale', type=float, default=0)
     parser.add_argument('--upsample-steps', type=str, default='fast27')
-    parser.add_argument('--prompt-weight', type=int, default=3)
+    parser.add_argument('--prompt-weight', type=int, default=5)
     parser.add_argument('--upsample', default=False, action='store_true')
 
     parser.set_defaults(ddim_respacing=True, transforms=False)

@@ -1,7 +1,9 @@
 import os
+import pathlib
 import sys
 from pathlib import Path
 
+import click
 import numpy as np
 
 current_path = Path(__file__).parent.resolve()
@@ -40,8 +42,10 @@ def download_models(mode):
         url_conf = 'https://heibox.uni-heidelberg.de/f/31a76b13ea27482981b4/?dl=1'
         url_ckpt = 'https://heibox.uni-heidelberg.de/f/578df07c8fc04ffbadf3/?dl=1'
 
-        path_conf = 'logs/diffusion/superresolution_bsr/configs/project.yaml'
-        path_ckpt = 'logs/diffusion/superresolution_bsr/checkpoints/last.ckpt'
+        cache_folder =pathlib.Path.home() / '.cache/diffusion_superres'
+        cache_folder.mkdir(exist_ok=True, parents=True)
+        path_conf = str(cache_folder / 'configs/project.yaml')
+        path_ckpt = str(cache_folder / 'checkpoints/last.ckpt')
 
         download_url(url_conf, path_conf)
         download_url(url_ckpt, path_ckpt)
@@ -265,3 +269,14 @@ def latent_upscale(image_path: str, output_path: str) -> str:
     a.save(output_path)
 
     return output_path
+
+
+@click.command()
+@click.option('--input', type=str,help="Path to image")
+@click.option('--output', type=str, default="out.png", help="Path to output image")
+def main(input: str, output: str):
+    latent_upscale(input, output)
+
+
+if __name__ == '__main__':
+    main()
