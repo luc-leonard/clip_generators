@@ -14,10 +14,10 @@ from clip_generators.utils import GlideGenerationArgs
 
 
 class Generator:
-    def __init__(self, args: GenerationArgs, clip, user: str):
+    def __init__(self, args: GenerationArgs, progress_bar_fn, user: str):
         self.args = args
-        self.clip = clip
         self.user = user
+        self.progress_bar_fn = progress_bar_fn
         if args.network_type == 'diffusion':
             self.dreamer = self.make_dreamer_diffusion(args)
         if args.network_type == 'legacy_diffusion':
@@ -30,6 +30,7 @@ class Generator:
     def make_dreamer_diffusion(self, arguments: GenerationArgs):
         now = datetime.datetime.now()
         return NewGenDiffusionDreamer(arguments.model_arguments.size, [],
+                                      progress_bar_fn=self.progress_bar_fn,
                                       seed=arguments.seed,
                                       steps=arguments.steps,
                                       cutn=arguments.cut,
@@ -47,7 +48,6 @@ class Generator:
         now = datetime.datetime.now()
         trainer = Dreamer(arguments.prompts,
                           vqgan_model=load_vqgan_model(arguments.model_arguments.config, arguments.model_arguments.checkpoint).to('cuda'),
-                          clip_model=self.clip,
                           learning_rate=arguments.model_arguments.learning_rate,
                           save_every=arguments.refresh_every,
                           outdir=name_filename_fat32_compatible(get_out_dir() / f'{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.user}_{arguments.prompts[0][0]}'),
@@ -68,5 +68,5 @@ class Generator:
         return GlideDreamer(27, model_arguments.clip_guidance_scale / 1000, arguments.steps, model_arguments.upsample_steps)
 
     def make_dreamer_legacy_diffusion(self, args):
-        return Diffusion_dreamer_new(self.clip, seed=args.seed)
+        return Diffusion_dreamer_new(seed=args.seed)
 

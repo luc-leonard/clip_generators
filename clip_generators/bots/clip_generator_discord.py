@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import traceback
+from functools import partial
 from pathlib import Path
 from typing import Dict, Callable
 
@@ -21,6 +22,7 @@ import progressbar
 import torch
 from discord import Thread
 from discord.abc import Messageable
+from tqdm import tqdm
 
 from clip_generators.bots.generator import Generator
 from clip_generators.bots.miner import Miner
@@ -31,14 +33,14 @@ from clip_generators.models.taming_transformers.clip_generator.generator import 
 from clip_generators.utils import name_filename_fat32_compatible, get_out_dir
 from clip_generators.models.rudalle.rudalle import RudalleGenerator
 from rudalle import get_realesrgan
-
+# from tqdm.contrib.discord import tqdm as discord_tqdm
 
 import warnings
 
 from clip_generators.models.upscaler.upscaler import latent_upscale
 
 warnings.filterwarnings("ignore")
-
+TOKEN = os.getenv('DISCORD_API_KEY')
 class DreamerClient(discord.Client):
     def __init__(self, **options):
         super().__init__(**options)
@@ -53,7 +55,7 @@ class DreamerClient(discord.Client):
         self.generating_thread = None
         self.defaults = {}
 
-        self.miner_enabled = True
+        self.miner_enabled = False
         self.miner = Miner('/home/lleonard/t-rex/launch.sh')
         self.current_dreamer = None
 
@@ -165,7 +167,7 @@ class DreamerClient(discord.Client):
         self.current_user = message.author
 
         if self.current_dreamer is None or arguments.network_type != self.current_dreamer.type() or self.current_dreamer.same_arguments(arguments) is False:
-            dreamer = Generator(arguments, self.clip, str(self.current_user)).dreamer
+            dreamer = Generator(arguments, None, str(self.current_user)).dreamer
             self.current_dreamer = dreamer
         else:
             dreamer = self.current_dreamer
@@ -209,6 +211,7 @@ class DreamerClient(discord.Client):
                 for i, path in enumerate(last_it[1]):
                     upscaled_path = name_filename_fat32_compatible(
                         get_out_dir() / f'{now.strftime("%Y_%m_%d")}/{now.isoformat()}_{self.current_user}_{arguments.prompts[0][0]}_{i}_hd.png')
+
                     half_path = name_filename_fat32_compatible(
                        out_dir / f'{now.isoformat()}_{self.current_user}_{arguments.prompts[0][0]}_{i}_half.png')
                     dreamer.upsampler()(path, upscaled_path)
@@ -242,6 +245,6 @@ class DreamerClient(discord.Client):
         self.miner.start()
 
 
-TOKEN = os.getenv('DISCORD_API_KEY')
+
 client = DreamerClient()
 client.run(TOKEN)

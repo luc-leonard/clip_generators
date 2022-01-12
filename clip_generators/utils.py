@@ -18,9 +18,12 @@ def get_out_dir() -> Path:
 
 
 def name_filename_fat32_compatible(path: Path) -> Path:
-    path_str = str(path)
-
-    path_str = str(path_str).replace(' ', '_')
+    extension = path.suffix
+    if extension:
+        path_str = str(path)[:-len(extension)]
+    else:
+        path_str = str(path)
+    path_str = path_str.replace(' ', '_').replace('#', '_').replace(':', '_').replace('.', '_') + extension
     return Path(path_str)
 
 
