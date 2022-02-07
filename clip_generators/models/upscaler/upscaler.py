@@ -106,7 +106,7 @@ def get_cond(mode, selected_path):
 
 
 
-def run(model, selected_path, task, custom_steps, eta, resize_enabled=False, classifier_ckpt=None, global_step=None):
+def run(model, selected_path, task, custom_steps, eta, resize_enabled=False):
     # global stride
 
     example = get_cond(task, selected_path)

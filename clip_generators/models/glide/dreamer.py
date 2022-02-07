@@ -1,8 +1,10 @@
 import datetime
+import random
 import time
 from pathlib import Path
 from typing import Dict, Union, Any
 
+import PIL.Image
 import torch as th
 from PIL import Image
 from IPython.display import display
@@ -17,6 +19,8 @@ from glide_text2im.model_creation import (
     model_and_diffusion_defaults,
     model_and_diffusion_defaults_upsampler,
 )
+
+import clip_generators.models.upscaler.upscaler
 from clip_generators.utils import GenerationArgs
 
 device = 'cuda'
@@ -98,7 +102,7 @@ def upsample(samples, model_up, diffusion_up, options_up, prompt, batch_size):
 def save(batch: th.Tensor, out_path: Path, all):
     """ Display a batch of images inline. """
     scaled = ((batch + 1)*127.5).round().clamp(0,255).to(th.uint8).cpu()
-    grid = make_grid(scaled, nrow=3).permute(1, 2, 0)
+    grid = make_grid(scaled, nrow=9).permute(1, 2, 0)
 
     if all:
         for i, image in enumerate(scaled):
@@ -125,12 +129,12 @@ class GlideDreamer:
         self.clip_guidance = clip_guidance
         self.steps = steps
         self.upscale_steps = upscale_steps
-
+        self.outdir = None
 
         self.make_models()
 
     def same_arguments(self, args: GenerationArgs):
-        return  self.clip_guidance == args.model_arguments.clip_guidance_scale and self.steps == args.steps and self.upscale_steps == args.model_arguments.upsample_steps
+        return self.clip_guidance == args.model_arguments.clip_guidance_scale and self.steps == args.steps and self.upscale_steps == args.model_arguments.upsample_steps
 
     def make_models(self):
         self.make_generator_model()
@@ -174,6 +178,8 @@ class GlideDreamer:
         self.diffusion = diffusion
 
     def generate(self, prompt, out_dir):
+        # not threadsafe
+        self.outdir = Path(out_dir)
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -182,6 +188,13 @@ class GlideDreamer:
 
     def type(self):
         return "glide"
+
+    def upsampler(self):
+        def _upsample(source_path, dest_path):
+            source_path = Path(source_path).parent / (str(random.randint(0, 9)) + '.png')
+
+            clip_generators.models.upscaler.upscaler.latent_upscale(str(source_path), dest_path)
+        return _upsample
 
     def close(self):
         ...

@@ -13,7 +13,7 @@ class Miner:
         self.mining_command = mining_command
 
         self.miner_thread = threading.Thread(target=self.mine)
-        #self.miner_thread.start()
+        self.miner_thread.start()
 
     def start(self):
         self.enabled = True

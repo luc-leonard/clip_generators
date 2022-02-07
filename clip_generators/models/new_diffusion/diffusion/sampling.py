@@ -21,6 +21,7 @@ def sample(model, x, steps, eta, extra_args):
 
         # Predict the noise and the denoised image
         pred = x * alphas[i] - v * sigmas[i]
+        yield pred
         eps = x * sigmas[i] + v * alphas[i]
 
         # If we are not on the last timestep, compute the noisy image for the
@@ -41,7 +42,7 @@ def sample(model, x, steps, eta, extra_args):
                 x += torch.randn_like(x) * ddim_sigma
 
     # If we are on the last timestep, output the denoised image
-    return pred
+    yield pred
 
 
 @torch.no_grad()
@@ -63,13 +64,18 @@ def cond_sample(model, x, steps, eta, extra_args, cond_fn):
 
             if steps[i] < 1:
                 pred = x * alphas[i] - v * sigmas[i]
-                cond_grad = cond_fn(x, ts * steps[i], pred, **extra_args).detach()
-                v = v.detach() - cond_grad * (sigmas[i] / alphas[i])
+                cond_grad = cond_fn(x, ts * steps[i], pred, **extra_args)
+                if cond_grad is not None:
+                    cond_grad = cond_grad.detach()
+                    v = v.detach() - cond_grad * (sigmas[i] / alphas[i])
+                else:
+                    v = v.detach()
             else:
                 v = v.detach()
 
         # Predict the noise and the denoised image
         pred = x * alphas[i] - v * sigmas[i]
+        yield pred
         eps = x * sigmas[i] + v * alphas[i]
 
         # If we are not on the last timestep, compute the noisy image for the
@@ -90,4 +96,4 @@ def cond_sample(model, x, steps, eta, extra_args, cond_fn):
                 x += torch.randn_like(x) * ddim_sigma
 
     # If we are on the last timestep, output the denoised image
-    return pred
+    yield pred
